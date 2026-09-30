@@ -38,7 +38,7 @@ def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
 # -----------------------------------------------------------------------------
 @st.cache_data
 def cargar_prospectos():
-    ruta_excel = r"D:\Usuarios\jmontesdeoca\Desktop\GeoLab\Exp2\Asignaciones\Prospectos_Asignados_y_Desbordamiento.xlsx"
+    ruta_excel = "Prospectos_Asignados_y_Desbordamiento.xlsx"
     df = pd.read_excel(ruta_excel, sheet_name="Prospectos_Asignados")
     return df
 
