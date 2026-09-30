@@ -94,7 +94,7 @@ if loc:
     st.success(f"📍 GPS Capturado: `{lat_vendedor:.5f}, {lon_vendedor:.5f}`")
     
     distancia_m = calcular_distancia_haversine(lat_vendedor, lon_vendedor, lat_target, lon_target)
-    RADIO_MAXIMO_M = 50.0  # Radio máximo de tolerancia en metros
+    RADIO_MAXIMO_M = 30.0  # Radio máximo de tolerancia en metros
     
     st.metric(label="Distancia al Establecimiento", value=f"{distancia_m} metros")
     
