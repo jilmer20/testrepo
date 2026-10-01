@@ -60,10 +60,9 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         st.error("❌ No se encontró el archivo 'Prospectos_Asignados_y_Desbordamiento.xlsx' en el servidor.")
         st.stop()
 
-    vendedores_disponibles = sorted(df_prospectos['id_vendedor'].astype(str).unique())
-    vendedor_sel = st.selectbox("👤 Selecciona tu ID de Asesor:", vendedores_disponibles)
-
-    df_vendedor = df_prospectos[df_prospectos['id_vendedor'].astype(str) == vendedor_sel].copy()
+   vendedores_disponibles = sorted(df_prospectos['ID-Nombre'].astype(str).unique())
+vendedor_sel = st.selectbox("👤 Selecciona tu Asesor (ID - Nombre):", vendedores_disponibles)
+df_vendedor = df_prospectos[df_prospectos['ID-Nombre'].astype(str) == vendedor_sel].copy()
     st.info(f"📋 Tienes **{len(df_vendedor)}** prospectos asignados.")
 
     col_nombre = 'Nombre' if 'Nombre' in df_vendedor.columns else 'nombre'
