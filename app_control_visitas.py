@@ -15,10 +15,8 @@ from streamlit_js_eval import get_geolocation
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="Control de Visitas GeoLab", page_icon="📍", layout="centered")
 
-# Archivo de persistencia para el historial de respuestas de campo
 RUTA_AUDITORIA = "Auditoria_Visitas_Campo.csv"
 
-# MENÚ LATERAL DE NAVEGACIÓN (VENDEDOR vs ADMINISTRADOR)
 st.sidebar.title("📌 Menú GeoLab")
 modo_app = st.sidebar.radio("Selecciona el perfil:", [
     "📱 Registro de Visitas (Vendedor)", 
@@ -26,7 +24,7 @@ modo_app = st.sidebar.radio("Selecciona el perfil:", [
 ])
 
 # -----------------------------------------------------------------------------
-# 2. FUNCIONES DE APOYO Y CÁLCULO DE DISTANCIA (HAVERSINE)
+# 2. FUNCIONES DE APOYO Y CÁLCULO DE DISTANCIA
 # -----------------------------------------------------------------------------
 def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
     """Calcula la distancia exacta en metros entre dos coordenadas geográficas."""
@@ -42,12 +40,23 @@ def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
 
 @st.cache_data
 def cargar_prospectos():
-    """Carga los prospectos desde el Excel en la nube o entorno local."""
+    """Carga los prospectos desde el archivo Excel asignado."""
     ruta_excel = "Prospectos_Asignados_y_Desbordamiento.xlsx"
     if not os.path.exists(ruta_excel):
         ruta_excel = r"D:\Usuarios\jmontesdeoca\Desktop\GeoLab\Exp2\Asignaciones\Prospectos_Asignados_y_Desbordamiento.xlsx"
     df = pd.read_excel(ruta_excel, sheet_name="Prospectos_Asignados")
     return df
+
+def obtener_comercio_visitados():
+    """Obtiene la lista de comercios que ya tienen registro guardado en la auditoría."""
+    if os.path.exists(RUTA_AUDITORIA):
+        try:
+            df_aud = pd.read_csv(RUTA_AUDITORIA)
+            if 'Comercio' in df_aud.columns:
+                return df_aud['Comercio'].dropna().unique().tolist()
+        except Exception:
+            return []
+    return []
 
 # =============================================================================
 # MODO 1: REGISTRO DE VISITAS DE CAMPO (ASESORES DE VENTA)
@@ -62,87 +71,111 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         st.error("❌ No se encontró el archivo 'Prospectos_Asignados_y_Desbordamiento.xlsx' en el servidor.")
         st.stop()
 
-    # Utilizar 'ID-Nombre' si existe en el archivo, o 'id_vendedor' como fallback
     col_asesor = 'ID-Nombre' if 'ID-Nombre' in df_prospectos.columns else 'id_vendedor'
     
     vendedores_disponibles = sorted(df_prospectos[col_asesor].astype(str).unique())
     vendedor_sel = st.selectbox("👤 Selecciona tu Asesor (ID - Nombre):", vendedores_disponibles)
 
-    df_vendedor = df_prospectos[df_prospectos[col_asesor].astype(str) == vendedor_sel].copy()
-    st.info(f"📋 Tienes **{len(df_vendedor)}** prospectos asignados.")
+    df_vendedor_total = df_prospectos[df_prospectos[col_asesor].astype(str) == vendedor_sel].copy()
+    
+    # FILTRADO DINÁMICO: Excluir comercios que ya han sido visitados
+    visitados = obtener_comercio_visitados()
+    col_nombre = 'Nombre' if 'Nombre' in df_vendedor_total.columns else 'nombre'
+    
+    df_vendedor_pendiente = df_vendedor_total[~df_vendedor_total[col_nombre].isin(visitados)].copy()
+    
+    total_asignados = len(df_vendedor_total)
+    restantes = len(df_vendedor_pendiente)
+    completados = total_asignados - restantes
 
-    # Selección del comercio
-    col_nombre = 'Nombre' if 'Nombre' in df_vendedor.columns else 'nombre'
-    col_lat = 'Latitud' if 'Latitud' in df_vendedor.columns else 'lat'
-    col_lon = 'Longitud' if 'Longitud' in df_vendedor.columns else 'lon'
+    st.info(f"📋 **Progreso de Cartera:** Quedan **{restantes}** pendientes de {total_asignados} asignados ({completados} visitados).")
 
-    prospecto_sel_nombre = st.selectbox("🏪 Selecciona el comercio a visitar:", df_vendedor[col_nombre].values)
-
-    row_prospecto = df_vendedor[df_vendedor[col_nombre] == prospecto_sel_nombre].iloc[0]
-
-    lat_target = float(str(row_prospecto[col_lat]).replace(',', '.'))
-    lon_target = float(str(row_prospecto[col_lon]).replace(',', '.'))
-
-    st.markdown(f"**Ubicación Objetivo:** `{lat_target}, {lon_target}`")
-
-    # BOTÓN DE NAVEGACIÓN DIRECTA A GOOGLE MAPS
-    url_gmaps_navegacion = f"https://www.google.com/maps/dir/?api=1&destination={lat_target},{lon_target}"
-    st.link_button("🗺️ IR (Abrir Ruta en Google Maps)", url_gmaps_navegacion, use_container_width=True)
-
-    st.divider()
-    st.subheader("🛰️️ Validación de Coordenada GPS")
-
-    # Lectura del GPS nativo del teléfono
-    loc = get_geolocation()
-
-    if loc:
-        lat_vendedor = loc['coords']['latitude']
-        lon_vendedor = loc['coords']['longitude']
-        
-        st.success(f"📍 GPS Capturado: `{lat_vendedor:.5f}, {lon_vendedor:.5f}`")
-        
-        distancia_m = calcular_distancia_haversine(lat_vendedor, lon_vendedor, lat_target, lon_target)
-        RADIO_MAXIMO_M = 20.0  # Tolerancia máxima permitida en metros
-        
-        st.metric(label="Distancia al Establecimiento", value=f"{distancia_m} metros")
-        
-        if distancia_m <= RADIO_MAXIMO_M:
-            st.success("✅ **CHECK-IN HABILITADO:** Confirmado que estás presencialmente en el comercio.")
-            
-            with st.form("form_visita"):
-                estatus_visita = st.selectbox("Estatus de la Visita:", [
-                    "Efectiva / Venta realizada", 
-                    "Cerrado temporalmente", 
-                    "No desea ser visitado", 
-                    "Local no existe / Cambió de rubro"
-                ])
-                observaciones = st.text_area("Observaciones de la visita:")
-                
-                submit = st.form_submit_button("📌 Registrar Visita y Guardar Check-in")
-                
-                if submit:
-                    registro = pd.DataFrame([{
-                        'Fecha_Hora': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        'Asesor': vendedor_sel,
-                        'Comercio': prospecto_sel_nombre,
-                        'Estatus': estatus_visita,
-                        'Distancia_Metros': distancia_m,
-                        'Lat_GPS_Vendedor': lat_vendedor,
-                        'Lon_GPS_Vendedor': lon_vendedor,
-                        'Observaciones': observaciones
-                    }])
-                    
-                    if not os.path.exists(RUTA_AUDITORIA):
-                        registro.to_csv(RUTA_AUDITORIA, index=False, encoding='utf-8-sig')
-                    else:
-                        registro.to_csv(RUTA_AUDITORIA, mode='a', header=False, index=False, encoding='utf-8-sig')
-                    
-                    st.balloons()
-                    st.success("🎉 ¡Visita auditada y guardada correctamente!")
-        else:
-            st.error(f"🚫 **CHECK-IN BLOQUEADO:** Te encuentras a {distancia_m} metros. Acércate a menos de {RADIO_MAXIMO_M} metros para habilitar el registro.")
+    if restantes == 0:
+        st.balloons()
+        st.success("🎉 **¡Felicidades!** Has completado la visita de todos tus prospectos asignados.")
     else:
-        st.warning("⚠️ Oprime **Permitir** en la ventana flotante de tu navegador móvil para activar la lectura del GPS.")
+        col_lat = 'Latitud' if 'Latitud' in df_vendedor_pendiente.columns else 'lat'
+        col_lon = 'Longitud' if 'Longitud' in df_vendedor_pendiente.columns else 'lon'
+
+        prospecto_sel_nombre = st.selectbox("🏪 Selecciona el comercio a visitar:", df_vendedor_pendiente[col_nombre].values)
+
+        row_prospecto = df_vendedor_pendiente[df_vendedor_pendiente[col_nombre] == prospecto_sel_nombre].iloc[0]
+
+        lat_target = float(str(row_prospecto[col_lat]).replace(',', '.'))
+        lon_target = float(str(row_prospecto[col_lon]).replace(',', '.'))
+
+        # TARJETA CON DETALLES DEL COMERCIO SELECCIONADO
+        st.markdown("### 🏬 Detalles del Comercio")
+        with st.container():
+            col_a, col_b = st.columns(2)
+            rubro_val = str(row_prospecto.get('Rubro', row_prospecto.get('rubro', 'No especificado')))
+            tel_val = str(row_prospecto.get('Telefono', row_prospecto.get('telefono', row_prospecto.get('phone', 'No disponible'))))
+            web_val = str(row_prospecto.get('Sitio_Web', row_prospecto.get('website', row_prospecto.get('sitio_web', 'No disponible'))))
+            
+            col_a.markdown(f"**🏷️ Rubro:** {rubro_val}")
+            col_a.markdown(f"**📞 Teléfono:** {tel_val}")
+            col_b.markdown(f"**🌐 Sitio Web:** {web_val}")
+            col_b.markdown(f"**📍 Coordenadas:** `{lat_target}, {lon_target}`")
+
+        # BOTÓN DE NAVEGACIÓN DIRECTA EN GOOGLE MAPS
+        url_gmaps_navegacion = f"https://www.google.com/maps/dir/?api=1&destination={lat_target},{lon_target}"
+        st.link_button("🗺️ IR (Abrir Ruta en Google Maps)", url_gmaps_navegacion, use_container_width=True)
+
+        st.divider()
+        st.subheader("🛰️ Validación de Coordenada GPS")
+
+        loc = get_geolocation()
+
+        if loc:
+            lat_vendedor = loc['coords']['latitude']
+            lon_vendedor = loc['coords']['longitude']
+            
+            st.success(f"📍 GPS Capturado: `{lat_vendedor:.5f}, {lon_vendedor:.5f}`")
+            
+            distancia_m = calcular_distancia_haversine(lat_vendedor, lon_vendedor, lat_target, lon_target)
+            RADIO_MAXIMO_M = 20.0  # Tolerancia máxima permitida en metros
+            
+            st.metric(label="Distancia al Establecimiento", value=f"{distancia_m} metros")
+            
+            if distancia_m <= RADIO_MAXIMO_M:
+                st.success("✅ **CHECK-IN HABILITADO:** Confirmado que estás presencialmente en el comercio.")
+                
+                with st.form("form_visita"):
+                    estatus_visita = st.selectbox("Estatus de la Visita:", [
+                        "Efectiva / Venta realizada", 
+                        "Cerrado temporalmente", 
+                        "No desea ser visitado", 
+                        "Local no existe / Cambió de rubro"
+                    ])
+                    observaciones = st.text_area("Observaciones de la visita:")
+                    
+                    submit = st.form_submit_button("📌 Registrar Visita y Guardar Check-in")
+                    
+                    if submit:
+                        registro = pd.DataFrame([{
+                            'Fecha_Hora': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            'Asesor': vendedor_sel,
+                            'Comercio': prospecto_sel_nombre,
+                            'Estatus': estatus_visita,
+                            'Distancia_Metros': distancia_m,
+                            'Lat_GPS_Vendedor': lat_vendedor,
+                            'Lon_GPS_Vendedor': lon_vendedor,
+                            'Observaciones': observaciones
+                        }])
+                        
+                        if not os.path.exists(RUTA_AUDITORIA):
+                            registro.to_csv(RUTA_AUDITORIA, index=False, encoding='utf-8-sig')
+                        else:
+                            registro.to_csv(RUTA_AUDITORIA, mode='a', header=False, index=False, encoding='utf-8-sig')
+                        
+                        st.cache_data.clear()
+                        st.balloons()
+                        st.success("🎉 ¡Visita auditada! El prospecto ha sido descontado de tu lista de pendientes.")
+                        st.rerun()
+            else:
+                st.error(f"🚫 **CHECK-IN BLOQUEADO:** Te encuentras a {distancia_m} metros. Acércate a menos de {RADIO_MAXIMO_M} metros para habilitar el registro.")
+        else:
+            st.warning("⚠️ Oprime **Permitir** en la ventana flotante de tu navegador móvil para activar la lectura del GPS.")
 
 # =============================================================================
 # MODO 2: PANEL DE ADMINISTRACIÓN Y AUDITORÍA (COORDINACIÓN)
@@ -150,7 +183,6 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
 elif modo_app == "🔐 Panel Admin / Auditoría":
     st.title("🔐 Panel de Control de Auditoría")
     
-    # CLAVE DE ACCESO
     password = st.text_input("Ingresa la clave de administrador:", type="password")
     
     if password == "Geolab2026":
@@ -172,7 +204,6 @@ elif modo_app == "🔐 Panel Admin / Auditoría":
             st.subheader("📋 Registro Detallado de Check-ins")
             st.dataframe(df_auditoria, use_container_width=True)
             
-            # BOTÓN DE DESCARGA
             csv_data = df_auditoria.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
             
             st.download_button(
