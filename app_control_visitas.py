@@ -11,24 +11,25 @@ import streamlit as st
 from streamlit_js_eval import get_geolocation
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURACIÓN DE LA INTERFAZ
+# 1. CONFIGURACIÓN DE LA INTERFAZ MÓVIL Y ESTILOS
 # -----------------------------------------------------------------------------
 st.set_page_config(page_title="Control de Visitas GeoLab", page_icon="📍", layout="centered")
 
-# Archivo de persistencia de respuestas
+# Archivo de persistencia para el historial de respuestas de campo
 RUTA_AUDITORIA = "Auditoria_Visitas_Campo.csv"
 
-# NAVEGACIÓN EN LA BARRA LATERAL
+# MENÚ LATERAL DE NAVEGACIÓN (VENDEDOR vs ADMINISTRADOR)
 st.sidebar.title("📌 Menú GeoLab")
-modo_app = st.sidebar.radio("Selecciona el modo:", [
+modo_app = st.sidebar.radio("Selecciona el perfil:", [
     "📱 Registro de Visitas (Vendedor)", 
     "🔐 Panel Admin / Auditoría"
 ])
 
 # -----------------------------------------------------------------------------
-# 2. FUNCIONES DE APOYO
+# 2. FUNCIONES DE APOYO Y CÁLCULO DE DISTANCIA (HAVERSINE)
 # -----------------------------------------------------------------------------
 def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
+    """Calcula la distancia exacta en metros entre dos coordenadas geográficas."""
     R = 6371000  # Radio terrestre en metros
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     delta_phi = math.radians(lat2 - lat1)
@@ -41,6 +42,7 @@ def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
 
 @st.cache_data
 def cargar_prospectos():
+    """Carga los prospectos desde el Excel en la nube o entorno local."""
     ruta_excel = "Prospectos_Asignados_y_Desbordamiento.xlsx"
     if not os.path.exists(ruta_excel):
         ruta_excel = r"D:\Usuarios\jmontesdeoca\Desktop\GeoLab\Exp2\Asignaciones\Prospectos_Asignados_y_Desbordamiento.xlsx"
@@ -48,7 +50,7 @@ def cargar_prospectos():
     return df
 
 # =============================================================================
-# MODO 1: REGISTRO DE VISITAS DE CAMPO (VENDEDORES)
+# MODO 1: REGISTRO DE VISITAS DE CAMPO (ASESORES DE VENTA)
 # =============================================================================
 if modo_app == "📱 Registro de Visitas (Vendedor)":
     st.title("📍 Control de Visitas de Campo")
@@ -60,11 +62,16 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         st.error("❌ No se encontró el archivo 'Prospectos_Asignados_y_Desbordamiento.xlsx' en el servidor.")
         st.stop()
 
-   vendedores_disponibles = sorted(df_prospectos['ID-Nombre'].astype(str).unique())
-vendedor_sel = st.selectbox("👤 Selecciona tu Asesor (ID - Nombre):", vendedores_disponibles)
-df_vendedor = df_prospectos[df_prospectos['ID-Nombre'].astype(str) == vendedor_sel].copy()
+    # Utilizar 'ID-Nombre' si existe en el archivo, o 'id_vendedor' como fallback
+    col_asesor = 'ID-Nombre' if 'ID-Nombre' in df_prospectos.columns else 'id_vendedor'
+    
+    vendedores_disponibles = sorted(df_prospectos[col_asesor].astype(str).unique())
+    vendedor_sel = st.selectbox("👤 Selecciona tu Asesor (ID - Nombre):", vendedores_disponibles)
+
+    df_vendedor = df_prospectos[df_prospectos[col_asesor].astype(str) == vendedor_sel].copy()
     st.info(f"📋 Tienes **{len(df_vendedor)}** prospectos asignados.")
 
+    # Selección del comercio
     col_nombre = 'Nombre' if 'Nombre' in df_vendedor.columns else 'nombre'
     col_lat = 'Latitud' if 'Latitud' in df_vendedor.columns else 'lat'
     col_lon = 'Longitud' if 'Longitud' in df_vendedor.columns else 'lon'
@@ -83,8 +90,9 @@ df_vendedor = df_prospectos[df_prospectos['ID-Nombre'].astype(str) == vendedor_s
     st.link_button("🗺️ IR (Abrir Ruta en Google Maps)", url_gmaps_navegacion, use_container_width=True)
 
     st.divider()
-    st.subheader("🛰️ Validación de Coordenada GPS")
+    st.subheader("🛰️️ Validación de Coordenada GPS")
 
+    # Lectura del GPS nativo del teléfono
     loc = get_geolocation()
 
     if loc:
@@ -94,7 +102,7 @@ df_vendedor = df_prospectos[df_prospectos['ID-Nombre'].astype(str) == vendedor_s
         st.success(f"📍 GPS Capturado: `{lat_vendedor:.5f}, {lon_vendedor:.5f}`")
         
         distancia_m = calcular_distancia_haversine(lat_vendedor, lon_vendedor, lat_target, lon_target)
-        RADIO_MAXIMO_M = 30.0
+        RADIO_MAXIMO_M = 20.0  # Tolerancia máxima permitida en metros
         
         st.metric(label="Distancia al Establecimiento", value=f"{distancia_m} metros")
         
@@ -115,7 +123,7 @@ df_vendedor = df_prospectos[df_prospectos['ID-Nombre'].astype(str) == vendedor_s
                 if submit:
                     registro = pd.DataFrame([{
                         'Fecha_Hora': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        'id_vendedor': vendedor_sel,
+                        'Asesor': vendedor_sel,
                         'Comercio': prospecto_sel_nombre,
                         'Estatus': estatus_visita,
                         'Distancia_Metros': distancia_m,
@@ -145,7 +153,7 @@ elif modo_app == "🔐 Panel Admin / Auditoría":
     # CLAVE DE ACCESO
     password = st.text_input("Ingresa la clave de administrador:", type="password")
     
-    if password == "Geolab2026":  # Clave configurada
+    if password == "Geolab2026":
         st.success("🔓 Acceso concedido")
         
         if os.path.exists(RUTA_AUDITORIA):
@@ -154,13 +162,17 @@ elif modo_app == "🔐 Panel Admin / Auditoría":
             st.subheader("📊 Resumen General de Visitas")
             col1, col2, col3 = st.columns(3)
             col1.metric("Total Visitas Auditadas", len(df_auditoria))
-            col2.metric("Asesores Activos", df_auditoria['id_vendedor'].nunique())
+            
+            col_asesor_aud = 'Asesor' if 'Asesor' in df_auditoria.columns else 'id_vendedor'
+            col2_val = df_auditoria[col_asesor_aud].nunique() if col_asesor_aud in df_auditoria.columns else 0
+            col2.metric("Asesores Activos", col2_val)
+            
             col3.metric("Visitas Efectivas", len(df_auditoria[df_auditoria['Estatus'].str.contains("Efectiva", na=False)]))
             
             st.subheader("📋 Registro Detallado de Check-ins")
             st.dataframe(df_auditoria, use_container_width=True)
             
-            # DESCARGA DEL REPORTE ACUMULADO
+            # BOTÓN DE DESCARGA
             csv_data = df_auditoria.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
             
             st.download_button(
