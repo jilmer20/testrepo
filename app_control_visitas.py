@@ -27,7 +27,6 @@ modo_app = st.sidebar.radio("Selecciona el perfil:", [
 # 2. FUNCIONES DE APOYO Y CÁLCULO DE DISTANCIA
 # -----------------------------------------------------------------------------
 def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
-    """Calcula la distancia exacta en metros entre dos coordenadas geográficas."""
     R = 6371000  # Radio terrestre en metros
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     delta_phi = math.radians(lat2 - lat1)
@@ -40,7 +39,6 @@ def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
 
 @st.cache_data
 def cargar_prospectos():
-    """Carga los prospectos desde el archivo Excel asignado."""
     ruta_excel = "Prospectos_Asignados_y_Desbordamiento.xlsx"
     if not os.path.exists(ruta_excel):
         ruta_excel = r"D:\Usuarios\jmontesdeoca\Desktop\GeoLab\Exp2\Asignaciones\Prospectos_Asignados_y_Desbordamiento.xlsx"
@@ -71,12 +69,22 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         st.error("❌ No se encontró el archivo 'Prospectos_Asignados_y_Desbordamiento.xlsx' en el servidor.")
         st.stop()
 
-    col_asesor = 'ID-Nombre' if 'ID-Nombre' in df_prospectos.columns else 'id_vendedor'
+    # 1. PASO 1: SELECCIÓN DE SUCURSAL
+    col_sucursal = 'Sucursal' if 'Sucursal' in df_prospectos.columns else 'Estado'
+    sucursales_disponibles = sorted(df_prospectos[col_sucursal].dropna().astype(str).unique())
     
-    vendedores_disponibles = sorted(df_prospectos[col_asesor].astype(str).unique())
-    vendedor_sel = st.selectbox("👤 Selecciona tu Asesor (ID - Nombre):", vendedores_disponibles)
+    sucursal_sel = st.selectbox("🏢 1. Selecciona tu Sucursal:", sucursales_disponibles)
 
-    df_vendedor_total = df_prospectos[df_prospectos[col_asesor].astype(str) == vendedor_sel].copy()
+    # Filtrar el DataFrame según la Sucursal elegida
+    df_sucursal = df_prospectos[df_prospectos[col_sucursal].astype(str) == sucursal_sel].copy()
+
+    # 2. PASO 2: SELECCIÓN DE ASESOR DE DICHA SUCURSAL
+    col_asesor = 'ID-Nombre' if 'ID-Nombre' in df_sucursal.columns else 'id_vendedor'
+    vendedores_disponibles = sorted(df_sucursal[col_asesor].dropna().astype(str).unique())
+    
+    vendedor_sel = st.selectbox("👤 2. Selecciona tu Asesor (ID - Nombre):", vendedores_disponibles)
+
+    df_vendedor_total = df_sucursal[df_sucursal[col_asesor].astype(str) == vendedor_sel].copy()
     
     # FILTRADO DINÁMICO: Excluir comercios que ya han sido visitados
     visitados = obtener_comercio_visitados()
@@ -112,7 +120,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
             tel_val = str(row_prospecto.get('Telefono', row_prospecto.get('telefono', row_prospecto.get('phone', 'No disponible'))))
             web_val = str(row_prospecto.get('Sitio_Web', row_prospecto.get('website', row_prospecto.get('sitio_web', 'No disponible'))))
             
-            col_a.markdown(f"**🏷️ Rubro:** {rubro_val}")
+            col_a.markdown(f"**🏷️️ Rubro:** {rubro_val}")
             col_a.markdown(f"**📞 Teléfono:** {tel_val}")
             col_b.markdown(f"**🌐 Sitio Web:** {web_val}")
             col_b.markdown(f"**📍 Coordenadas:** `{lat_target}, {lon_target}`")
@@ -133,7 +141,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
             st.success(f"📍 GPS Capturado: `{lat_vendedor:.5f}, {lon_vendedor:.5f}`")
             
             distancia_m = calcular_distancia_haversine(lat_vendedor, lon_vendedor, lat_target, lon_target)
-            RADIO_MAXIMO_M = 20.0  # Tolerancia máxima permitida en metros
+            RADIO_MAXIMO_M = 20.0  # Radio máximo permitido en metros
             
             st.metric(label="Distancia al Establecimiento", value=f"{distancia_m} metros")
             
@@ -154,6 +162,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                     if submit:
                         registro = pd.DataFrame([{
                             'Fecha_Hora': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            'Sucursal': sucursal_sel,
                             'Asesor': vendedor_sel,
                             'Comercio': prospecto_sel_nombre,
                             'Estatus': estatus_visita,
