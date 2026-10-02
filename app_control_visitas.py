@@ -174,8 +174,9 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                 
                 with st.form("form_visita"):
                     estatus_visita = st.selectbox("Estatus de la Visita:", [
-                        "Efectiva / Venta realizada", 
-                        "Cerrado temporalmente", 
+                        "Efectiva / Visita realizada", 
+                        "Cerrado", 
+                        "Clausurado", 
                         "No desea ser visitado", 
                         "Local no existe / Cambió de rubro"
                     ])
