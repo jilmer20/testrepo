@@ -51,20 +51,47 @@ def cargar_prospectos():
         ruta_excel = r"D:\Usuarios\jmontesdeoca\Desktop\GeoLab\Exp2\Asignaciones\Prospectos_Asignados_y_Desbordamiento.xlsx"
     df = pd.read_excel(ruta_excel, sheet_name="Prospectos_Asignados")
     
-    # Limpieza previa de nombres de columnas (elimina espacios accidentales)
+    # Limpieza previa de nombres de columnas
     df.columns = df.columns.str.strip()
     return df
 
-def obtener_comercio_visitados():
-    """Obtiene la lista de comercios que ya tienen registro guardado en la auditoría."""
+def obtener_comercios_finalizados():
+    """
+    Obtiene la lista de comercios que ya deben ser ELIMINADOS de la lista:
+    1. Aquellos con visita Efectiva o Local No Existe.
+    2. Aquellos con 2 o más intentos fallidos (Cerrado / No desea ser visitado).
+    """
+    if os.path.exists(RUTA_AUDITORIA):
+        try:
+            df_aud = pd.read_csv(RUTA_AUDITORIA)
+            if 'Comercio' in df_aud.columns and 'Estatus' in df_aud.columns:
+                estatus_reintento = ["Cerrado temporalmente", "No desea ser visitado"]
+                
+                # 1. Eliminar si fue venta efectiva o local no existe
+                definitivos = df_aud[~df_aud['Estatus'].isin(estatus_reintento)]['Comercio'].unique().tolist()
+                
+                # 2. Contar reintentos en 'Cerrado' o 'No desea ser visitado'
+                df_reintentos = df_aud[df_aud['Estatus'].isin(estatus_reintento)]
+                conteo_reintentos = df_reintentos.groupby('Comercio').size()
+                
+                # Si se visitó 2 o más veces con motivo no efectivo, se descarta definitivamente
+                descartados_segunda_visita = conteo_reintentos[conteo_reintentos >= 2].index.tolist()
+                
+                return list(set(definitivos + descartados_segunda_visita))
+        except Exception:
+            return []
+    return []
+
+def obtener_conteo_visitas_comercio(comercio_nombre):
+    """Retorna cuántas veces se ha registrado previamente una visita a este comercio."""
     if os.path.exists(RUTA_AUDITORIA):
         try:
             df_aud = pd.read_csv(RUTA_AUDITORIA)
             if 'Comercio' in df_aud.columns:
-                return df_aud['Comercio'].dropna().unique().tolist()
+                return len(df_aud[df_aud['Comercio'] == comercio_nombre])
         except Exception:
-            return []
-    return []
+            return 0
+    return 0
 
 # =============================================================================
 # MODO 1: REGISTRO DE VISITAS DE CAMPO (ASESORES DE VENTA)
@@ -110,17 +137,17 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
 
     df_vendedor_total = df_sucursal[df_sucursal[col_asesor].astype(str) == vendedor_sel].copy()
     
-    # FILTRADO DINÁMICO: Excluir comercios que ya han sido visitados
-    visitados = obtener_comercio_visitados()
+    # FILTRADO DINÁMICO: Excluir comercios completados o descartados tras 2da visita
+    completados_lista = obtener_comercios_finalizados()
     col_nombre = columnas_lower.get('nombre', 'Nombre')
     
-    df_vendedor_pendiente = df_vendedor_total[~df_vendedor_total[col_nombre].isin(visitados)].copy()
+    df_vendedor_pendiente = df_vendedor_total[~df_vendedor_total[col_nombre].isin(completados_lista)].copy()
     
     total_asignados = len(df_vendedor_total)
     restantes = len(df_vendedor_pendiente)
-    completados = total_asignados - restantes
+    atendidos = total_asignados - restantes
 
-    st.info(f"📋 **Progreso de Cartera:** Quedan **{restantes}** pendientes de {total_asignados} asignados ({completados} visitados).")
+    st.info(f"📋 **Progreso de Cartera:** Quedan **{restantes}** pendientes de {total_asignados} asignados ({atendidos} cerrados/finalizados).")
 
     if restantes == 0:
         st.balloons()
@@ -136,6 +163,11 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         lat_target = float(str(row_prospecto[col_lat]).replace(',', '.'))
         lon_target = float(str(row_prospecto[col_lon]).replace(',', '.'))
 
+        # Revisar cuántas veces ha sido visitado este local previamente
+        num_intentos_previos = obtener_conteo_visitas_comercio(prospecto_sel_nombre)
+        if num_intentos_previos == 1:
+            st.warning("⚠️ **ATENCIÓN:** Este comercio se encuentra en **SEGUNDO INTENTO DE VISITA** (Fue marcado anteriormente como Cerrado o No desea ser visitado).")
+
         # TARJETA CON DETALLES DEL COMERCIO SELECCIONADO
         st.markdown("### 🏬 Detalles del Comercio")
         with st.container():
@@ -145,7 +177,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
             web_val = str(row_prospecto.get('Sitio_Web', row_prospecto.get('website', row_prospecto.get('sitio_web', 'No disponible'))))
             
             col_a.markdown(f"**🏷 Rubro:** {rubro_val}")
-            col_a.markdown(f"**📞 Teléfono:** {tel_val}")
+            col_a.markdown(f"**📞 Teléfono Principal:** {tel_val}")
             col_b.markdown(f"**🌐 Sitio Web:** {web_val}")
             col_b.markdown(f"**📍 Coordenadas:** `{lat_target}, {lon_target}`")
 
@@ -173,13 +205,30 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                 st.success("✅ **CHECK-IN HABILITADO:** Confirmado que estás presencialmente en el comercio.")
                 
                 with st.form("form_visita"):
-                    estatus_visita = st.selectbox("Estatus de la Visita:", [
+                    st.markdown("#### 📝 Datos de la Visita y Registro")
+                    
+                    estatus_visita = st.selectbox("Estatus de la Visita (*):", [
                         "Efectiva / Visita realizada", 
-                        "Cerrado", 
-                        "Clausurado", 
+                        "Cerrado",
+                        "Clausurado",
                         "No desea ser visitado", 
                         "Local no existe / Cambió de rubro"
                     ])
+                    
+                    rif_cliente = st.text_input("📄 Número de RIF del Cliente (Ej: J-12345678-0):")
+                    telefono_add = st.text_input("📞 Teléfono Adicional / Contacto Secundario:")
+                    
+                    st.markdown("---")
+                    st.markdown("#### 📊 Encuesta de Mercado (Opcional)")
+                    
+                    trabaja_embutidos = st.radio("¿Vende o trabaja Ud. con embutidos?", ["Sin responder", "SI", "NO"], horizontal=True)
+                    
+                    cuales_embutidos = ""
+                    if trabaja_embutidos == "SI":
+                        cuales_embutidos = st.text_input("¿Cuáles embutidos trabaja? (Ej: Jamón de Espalda, Salchichón, Queso Amarillo, etc.):")
+                        
+                    posee_nevera = st.radio("¿Posee Nevera / Exhibidor Refrigerado?", ["Sin responder", "SI", "NO"], horizontal=True)
+                    
                     observaciones = st.text_area("Observaciones de la visita:")
                     
                     submit = st.form_submit_button("📌 Registrar Visita y Guardar Check-in")
@@ -191,6 +240,12 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                             'Asesor': vendedor_sel,
                             'Comercio': prospecto_sel_nombre,
                             'Estatus': estatus_visita,
+                            'Intento_Numero': num_intentos_previos + 1,
+                            'RIF_Cliente': rif_cliente,
+                            'Telefono_Adicional': telefono_add,
+                            'Trabaja_Embutidos': trabaja_embutidos,
+                            'Cuales_Embutidos': cuales_embutidos,
+                            'Posee_Nevera': posee_nevera,
                             'Distancia_Metros': distancia_m,
                             'Lat_GPS_Vendedor': lat_vendedor,
                             'Lon_GPS_Vendedor': lon_vendedor,
@@ -204,7 +259,12 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                         
                         st.cache_data.clear()
                         st.balloons()
-                        st.success("🎉 ¡Visita auditada! El prospecto ha sido descontado de tu lista de pendientes.")
+                        
+                        if estatus_visita in ["Cerrado temporalmente", "No desea ser visitado"] and num_intentos_previos == 0:
+                            st.warning("⚠️ **Visita Registrada (1er Intento):** El prospecto se mantendrá en tu lista para una segunda visita de verificación.")
+                        else:
+                            st.success("🎉 **¡Visita Auditada!** El prospecto ha sido descontado/completado de tu lista.")
+                            
                         st.rerun()
             else:
                 st.error(f"🚫 **CHECK-IN BLOQUEADO:** Te encuentras a {distancia_m} metros. Acércate a menos de {RADIO_MAXIMO_M} metros para habilitar el registro.")
@@ -235,13 +295,13 @@ elif modo_app == "🔐 Panel Admin / Auditoría":
             
             col3.metric("Visitas Efectivas", len(df_auditoria[df_auditoria['Estatus'].str.contains("Efectiva", na=False)]))
             
-            st.subheader("📋 Registro Detallado de Check-ins")
+            st.subheader("📋 Registro Detallado de Check-ins y Encuesta")
             st.dataframe(df_auditoria, use_container_width=True)
             
             csv_data = df_auditoria.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
             
             st.download_button(
-                label="📥 Descargar Reporte de Visitas (CSV / Excel)",
+                label="📥 Descargar Reporte Completo de Visitas (CSV / Excel)",
                 data=csv_data,
                 file_name=f"Reporte_Auditoria_Visitas_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv",
