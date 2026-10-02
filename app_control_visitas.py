@@ -3,8 +3,6 @@
 
 # In[ ]:
 
-
-
 import os
 import math
 import re
@@ -21,7 +19,6 @@ st.set_page_config(page_title="Control de Visitas GeoLab", page_icon="📍", lay
 RUTA_AUDITORIA = "Auditoria_Visitas_Campo.csv"
 CARPETA_FOTOS = "Fotos_Evidencia"
 
-# Crear la carpeta de fotos de evidencia si no existe
 if not os.path.exists(CARPETA_FOTOS):
     os.makedirs(CARPETA_FOTOS)
 
@@ -33,7 +30,6 @@ modo_app = st.sidebar.radio("Selecciona el perfil:", [
 
 st.sidebar.divider()
 
-# BOTÓN DE RECARGA DE DATOS
 if st.sidebar.button("🔄 Recargar Datos del Excel", use_container_width=True):
     st.cache_data.clear()
     st.sidebar.success("¡Caché borrada! Leyendo la versión más reciente del Excel...")
@@ -54,15 +50,12 @@ def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
     return round(R * c, 2)
 
 def limpiar_formato_rif(rif_raw):
-    """Elimina guiones, espacios y convierte a mayúsculas para guardar un RIF limpio."""
     if not rif_raw:
         return ""
-    rif_limpio = re.sub(r'[^A-Za-z0-9]', '', str(rif_raw)).upper()
-    return rif_limpio
+    return re.sub(r'[^A-Za-z0-9]', '', str(rif_raw)).upper()
 
-def guardar_foto_evidencia(foto_buffer, comercio_nombre):
-    """Guarda la foto capturada en disco y retorna la ruta del archivo."""
-    if foto_buffer is None:
+def guardar_foto_evidencia(foto_bytes, comercio_nombre):
+    if not foto_bytes:
         return ""
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -72,7 +65,7 @@ def guardar_foto_evidencia(foto_buffer, comercio_nombre):
     
     try:
         with open(ruta_completa, "wb") as f:
-            f.write(foto_buffer.getbuffer())
+            f.write(foto_bytes)
         return ruta_completa
     except Exception as e:
         st.error(f"Error guardando foto: {e}")
@@ -84,8 +77,6 @@ def cargar_prospectos():
     if not os.path.exists(ruta_excel):
         ruta_excel = r"D:\Usuarios\jmontesdeoca\Desktop\GeoLab\Exp2\Asignaciones\Prospectos_Asignados_y_Desbordamiento.xlsx"
     df = pd.read_excel(ruta_excel, sheet_name="Prospectos_Asignados")
-    
-    # Limpieza previa de nombres de columnas
     df.columns = df.columns.str.strip()
     return df
 
@@ -95,15 +86,10 @@ def obtener_comercios_finalizados():
             df_aud = pd.read_csv(RUTA_AUDITORIA)
             if 'Comercio' in df_aud.columns and 'Estatus' in df_aud.columns:
                 estatus_reintento = ["Cerrado temporalmente", "No desea ser visitado", "Cerrado", "No interesado"]
-                
-                # 1. Eliminar si fue venta efectiva o local no existe
                 definitivos = df_aud[~df_aud['Estatus'].isin(estatus_reintento)]['Comercio'].unique().tolist()
                 
-                # 2. Contar reintentos en 'Cerrado' o 'No interesado'
                 df_reintentos = df_aud[df_aud['Estatus'].isin(estatus_reintento)]
                 conteo_reintentos = df_reintentos.groupby('Comercio').size()
-                
-                # Si se visitó 2 o más veces con motivo no efectivo, se descarta definitivamente
                 descartados_segunda_visita = conteo_reintentos[conteo_reintentos >= 2].index.tolist()
                 
                 return list(set(definitivos + descartados_segunda_visita))
@@ -134,38 +120,22 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         st.error("❌ No se encontró el archivo 'Prospectos_Asignados_y_Desbordamiento.xlsx' en el servidor.")
         st.stop()
 
-    # 1. PASO 1: SELECCIÓN DE SUCURSAL
     columnas_lower = {col.lower(): col for col in df_prospectos.columns}
-    
-    if 'sucursal' in columnas_lower:
-        col_sucursal = columnas_lower['sucursal']
-    elif 'estado' in columnas_lower:
-        col_sucursal = columnas_lower['estado']
-    else:
-        col_sucursal = df_prospectos.columns[0]
+    col_sucursal = columnas_lower.get('sucursal', columnas_lower.get('estado', df_prospectos.columns[0]))
 
     sucursales_disponibles = sorted(df_prospectos[col_sucursal].dropna().astype(str).unique())
     sucursal_sel = st.selectbox("🏢 1. Selecciona tu Sucursal:", sucursales_disponibles)
 
     df_sucursal = df_prospectos[df_prospectos[col_sucursal].astype(str) == sucursal_sel].copy()
 
-    # 2. PASO 2: SELECCIÓN DE ASESOR DE DICHA SUCURSAL
-    if 'id-nombre' in columnas_lower:
-        col_asesor = columnas_lower['id-nombre']
-    elif 'id_vendedor' in columnas_lower:
-        col_asesor = columnas_lower['id_vendedor']
-    else:
-        col_asesor = 'Asesor'
-
+    col_asesor = columnas_lower.get('id-nombre', columnas_lower.get('id_vendedor', 'Asesor'))
     vendedores_disponibles = sorted(df_sucursal[col_asesor].dropna().astype(str).unique())
     vendedor_sel = st.selectbox("👤 2. Selecciona tu Asesor (ID - Nombre):", vendedores_disponibles)
 
     df_vendedor_total = df_sucursal[df_sucursal[col_asesor].astype(str) == vendedor_sel].copy()
     
-    # FILTRADO DINÁMICO
     completados_lista = obtener_comercios_finalizados()
     col_nombre = columnas_lower.get('nombre', 'Nombre')
-    
     df_vendedor_pendiente = df_vendedor_total[~df_vendedor_total[col_nombre].isin(completados_lista)].copy()
     
     total_asignados = len(df_vendedor_total)
@@ -190,9 +160,8 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
 
         num_intentos_previos = obtener_conteo_visitas_comercio(prospecto_sel_nombre)
         if num_intentos_previos == 1:
-            st.warning("⚠️ **ATENCIÓN:** Este comercio se encuentra en **SEGUNDO INTENTO DE VISITA** (Fue marcado anteriormente como Cerrado o No desea ser visitado).")
+            st.warning("⚠️ **ATENCIÓN:** Este comercio se encuentra en **SEGUNDO INTENTO DE VISITA**.")
 
-        # TARJETA CON DETALLES DEL COMERCIO SELECCIONADO
         st.markdown("### 🏬 Detalles del Comercio")
         with st.container():
             col_a, col_b = st.columns(2)
@@ -205,9 +174,8 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
             col_b.markdown(f"**🌐 Sitio Web:** {web_val}")
             col_b.markdown(f"**📍 Coordenadas:** `{lat_target}, {lon_target}`")
 
-        # NAVEGACIÓN GOOGLE MAPS
         url_gmaps_navegacion = f"https://www.google.com/maps/dir/?api=1&destination={lat_target},{lon_target}"
-        st.link_button("🗺️ IR (Abrir Ruta en Google Maps)", url_gmaps_navegacion, use_container_width=True)
+        st.link_button("🗺️️ IR (Abrir Ruta en Google Maps)", url_gmaps_navegacion, use_container_width=True)
 
         st.divider()
         st.subheader("🛰️ Validación de Coordenada GPS")
@@ -221,105 +189,111 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
             st.success(f"📍 GPS Capturado: `{lat_vendedor:.5f}, {lon_vendedor:.5f}`")
             
             distancia_m = calcular_distancia_haversine(lat_vendedor, lon_vendedor, lat_target, lon_target)
-            RADIO_MAXIMO_M = 40.0  # Radio máximo permitido
+            RADIO_MAXIMO_M = 40.0
             
             st.metric(label="Distancia al Establecimiento", value=f"{distancia_m} metros")
             
             if distancia_m <= RADIO_MAXIMO_M:
                 st.success("✅ **CHECK-IN HABILITADO:** Confirmado que estás presencialmente en el comercio.")
                 
-                # TODO DENTRO DEL FORMULARIO PARA EVITAR PERDER LA FOTO AL HACER SUBMIT
-                with st.form("form_visita", clear_on_submit=False):
-                    st.markdown("#### 📝 Datos de la Visita y Registro")
-                    
-                    estatus_visita = st.selectbox("Estatus de la Visita (*):", [
-                        "Efectiva / Visita realizada", 
-                        "Cerrado",
-                        "Clausurado",
-                        "No interesado", 
-                        "Local no existe / Cambió de rubro"
-                    ])
-                    
-                    rif_cliente_input = st.text_input("📄 Número de RIF del Cliente (Sin guiones, Ej: J123456780) (* Obligatorio para visitas efectivas):")
-                    telefono_add = st.text_input("📞 Teléfono Adicional / Contacto Secundario:")
-                    
-                    st.markdown("---")
-                    st.markdown("#### 📷 Foto de Evidencia / Fachada")
-                    foto_capturada = st.camera_input("Tomar foto desde la cámara")
+                # -------------------------------------------------------------
+                # MANEJO DE FOTO FUERA DE FORMULARIO CON SESSION STATE
+                # -------------------------------------------------------------
+                st.markdown("### 📝 Formulario de Registro")
+                
+                estatus_visita = st.selectbox("Estatus de la Visita (*):", [
+                    "Efectiva / Visita realizada", 
+                    "Cerrado",
+                    "Clausurado",
+                    "No interesado", 
+                    "Local no existe / Cambió de rubro"
+                ])
+                
+                st.markdown("#### 📷 Captura de Evidencia (Opcional / Requerida según Estatus)")
+                foto_input = st.camera_input("Tomar foto desde la cámara del teléfono")
 
-                    st.markdown("---")
-                    st.markdown("#### 📊 Encuesta de Mercado (Opcional)")
-                    
-                    trabaja_bebidas_alimentos = st.radio("¿Vende o trabaja Ud. con Bebidas y Alimentos?", ["Sin responder", "SI", "NO"], horizontal=True)
-                    trabaja_embutidos = st.radio("¿Vende o trabaja Ud. con embutidos?", ["Sin responder", "SI", "NO"], horizontal=True)
-                    
-                    cuales_embutidos = st.text_input("¿Cuáles embutidos trabaja? (Opcional):")
-                        
-                    posee_nevera = st.radio("¿Posee Nevera / Exhibidor Refrigerado?", ["Sin responder", "SI", "NO"], horizontal=True)
-                    posee_rebanadora = st.radio("¿Posee rebanadora?", ["Sin responder", "SI", "NO"], horizontal=True)
-                    
-                    observaciones = st.text_area("Observaciones de la visita:")
-                    
-                    submit = st.form_submit_button("📌 Registrar Visita y Guardar Check-in", use_container_width=True)
-                    
-                    if submit:
-                        # 1. VALIDACIÓN Y LIMPIEZA DEL RIF
-                        rif_limpio = limpiar_formato_rif(rif_cliente_input)
-                        
-                        if estatus_visita == "Efectiva / Visita realizada":
-                            if not rif_limpio:
-                                st.error("❌ **CAMPO OBLIGATORIO:** Debes ingresar el RIF del cliente para registrar una visita Efectiva.")
-                                st.stop()
-                            elif len(rif_limpio) < 7:
-                                st.error("❌ **FORMATO INVÁLIDO:** Por favor ingresa un RIF válido sin guiones (Ejemplo: J123456780).")
-                                st.stop()
+                # Guardar los bytes de la foto en la sesión
+                if foto_input is not None:
+                    st.session_state['foto_bytes'] = foto_input.getvalue()
+                    st.success("📸 Foto capturada correctamente.")
 
-                        # 2. VALIDACIÓN DE FOTO PARA "CAMBIÓ DE RUBRO" O "CLAUSURADO"
-                        if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado"] and foto_capturada is None:
-                            st.error("❌ **FOTO REQUERIDA:** Para marcar esta opción debes tomar una foto de evidencia.")
+                rif_cliente_input = st.text_input("📄 Número de RIF del Cliente (Sin guiones, Ej: J123456780) (* Obligatorio para visitas efectivas):")
+                telefono_add = st.text_input("📞 Teléfono Adicional / Contacto Secundario:")
+                
+                st.markdown("---")
+                st.markdown("#### 📊 Encuesta de Mercado (Opcional)")
+                
+                trabaja_bebidas_alimentos = st.radio("¿Vende o trabaja Ud. con Bebidas y Alimentos?", ["Sin responder", "SI", "NO"], horizontal=True)
+                trabaja_embutidos = st.radio("¿Vende o trabaja Ud. con embutidos?", ["Sin responder", "SI", "NO"], horizontal=True)
+                cuales_embutidos = st.text_input("¿Cuáles embutidos trabaja? (Opcional):")
+                posee_nevera = st.radio("¿Posee Nevera / Exhibidor Refrigerado?", ["Sin responder", "SI", "NO"], horizontal=True)
+                posee_rebanadora = st.radio("¿Posee rebanadora?", ["Sin responder", "SI", "NO"], horizontal=True)
+                observaciones = st.text_area("Observaciones de la visita:")
+                
+                # BOTÓN DIRECTO (SIN FORMULARIO BLOQUEANTE)
+                if st.button("📌 Registrar Visita y Guardar Check-in", type="primary", use_container_width=True):
+                    
+                    # 1. VALIDACIÓN RIF
+                    rif_limpio = limpiar_formato_rif(rif_cliente_input)
+                    if estatus_visita == "Efectiva / Visita realizada":
+                        if not rif_limpio:
+                            st.error("❌ **CAMPO OBLIGATORIO:** Debes ingresar el RIF del cliente para registrar una visita Efectiva.")
+                            st.stop()
+                        elif len(rif_limpio) < 7:
+                            st.error("❌ **FORMATO INVÁLIDO:** Por favor ingresa un RIF válido sin guiones (Ejemplo: J123456780).")
                             st.stop()
 
-                        # 3. GUARDAR LA FOTO EN EL DISCO SI EXISTE
-                        ruta_foto_guardada = ""
-                        if foto_capturada is not None:
-                            ruta_foto_guardada = guardar_foto_evidencia(foto_capturada, prospecto_sel_nombre)
+                    # 2. VALIDACIÓN FOTO
+                    bytes_foto = st.session_state.get('foto_bytes', None)
+                    if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado"] and not bytes_foto:
+                        st.error("❌ **FOTO REQUERIDA:** Para marcar esta opción debes tomar una foto de evidencia.")
+                        st.stop()
 
-                        # 4. CREAR Y APPEND DEL REGISTRO AL CSV
-                        registro = pd.DataFrame([{
-                            'Fecha_Hora': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                            'Sucursal': sucursal_sel,
-                            'Asesor': vendedor_sel,
-                            'Comercio': prospecto_sel_nombre,
-                            'Estatus': estatus_visita,
-                            'Intento_Numero': num_intentos_previos + 1,
-                            'RIF_Cliente': rif_limpio,
-                            'Telefono_Adicional': telefono_add,
-                            'Trabaja_Bebidas_Alimentos': trabaja_bebidas_alimentos,
-                            'Trabaja_Embutidos': trabaja_embutidos,
-                            'Cuales_Embutidos': cuales_embutidos,
-                            'Posee_Nevera': posee_nevera,
-                            'Posee_Rebanadora': posee_rebanadora,
-                            'Distancia_Metros': distancia_m,
-                            'Lat_GPS_Vendedor': lat_vendedor,
-                            'Lon_GPS_Vendedor': lon_vendedor,
-                            'Ruta_Foto_Evidencia': ruta_foto_guardada,
-                            'Observaciones': observaciones
-                        }])
+                    # 3. GUARDAR FOTO
+                    ruta_foto_guardada = ""
+                    if bytes_foto:
+                        ruta_foto_guardada = guardar_foto_evidencia(bytes_foto, prospecto_sel_nombre)
+
+                    # 4. GUARDAR REGISTRO CSV
+                    registro = pd.DataFrame([{
+                        'Fecha_Hora': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'Sucursal': sucursal_sel,
+                        'Asesor': vendedor_sel,
+                        'Comercio': prospecto_sel_nombre,
+                        'Estatus': estatus_visita,
+                        'Intento_Numero': num_intentos_previos + 1,
+                        'RIF_Cliente': rif_limpio,
+                        'Telefono_Adicional': telefono_add,
+                        'Trabaja_Bebidas_Alimentos': trabaja_bebidas_alimentos,
+                        'Trabaja_Embutidos': trabaja_embutidos,
+                        'Cuales_Embutidos': cuales_embutidos,
+                        'Posee_Nevera': posee_nevera,
+                        'Posee_Rebanadora': posee_rebanadora,
+                        'Distancia_Metros': distancia_m,
+                        'Lat_GPS_Vendedor': lat_vendedor,
+                        'Lon_GPS_Vendedor': lon_vendedor,
+                        'Ruta_Foto_Evidencia': ruta_foto_guardada,
+                        'Observaciones': observaciones
+                    }])
+                    
+                    if not os.path.exists(RUTA_AUDITORIA):
+                        registro.to_csv(RUTA_AUDITORIA, index=False, encoding='utf-8-sig')
+                    else:
+                        registro.to_csv(RUTA_AUDITORIA, mode='a', header=False, index=False, encoding='utf-8-sig')
+                    
+                    # Limpiar foto de la sesión tras guardar exitosamente
+                    if 'foto_bytes' in st.session_state:
+                        del st.session_state['foto_bytes']
+
+                    st.cache_data.clear()
+                    st.balloons()
+                    
+                    if estatus_visita in ["Cerrado", "No interesado"] and num_intentos_previos == 0:
+                        st.warning("⚠️ **Visita Registrada (1er Intento):** El prospecto se mantendrá en tu lista para una segunda visita de verificación.")
+                    else:
+                        st.success("🎉 **¡Visita Auditada con Éxito!** El registro y la foto han sido guardados.")
                         
-                        if not os.path.exists(RUTA_AUDITORIA):
-                            registro.to_csv(RUTA_AUDITORIA, index=False, encoding='utf-8-sig')
-                        else:
-                            registro.to_csv(RUTA_AUDITORIA, mode='a', header=False, index=False, encoding='utf-8-sig')
-                        
-                        st.cache_data.clear()
-                        st.balloons()
-                        
-                        if estatus_visita in ["Cerrado", "No interesado"] and num_intentos_previos == 0:
-                            st.warning("⚠️ **Visita Registrada (1er Intento):** El prospecto se mantendrá en tu lista para una segunda visita de verificación.")
-                        else:
-                            st.success("🎉 **¡Visita Auditada con Éxito!** El registro y la foto han sido guardados.")
-                            
-                        st.rerun()
+                    st.rerun()
             else:
                 st.error(f"🚫 **CHECK-IN BLOQUEADO:** Te encuentras a {distancia_m} metros. Acércate a menos de {RADIO_MAXIMO_M} metros para habilitar el registro.")
         else:
@@ -352,7 +326,6 @@ elif modo_app == "🔐 Panel Admin / Auditoría":
             st.subheader("📋 Registro Detallado de Check-ins y Encuesta")
             st.dataframe(df_auditoria, use_container_width=True)
 
-            # VISUALIZADOR DE FOTOS EN EL PANEL ADMIN
             st.subheader("🖼️ Visor de Evidencias Fotográficas")
             df_con_fotos = df_auditoria[df_auditoria['Ruta_Foto_Evidencia'].notna() & (df_auditoria['Ruta_Foto_Evidencia'] != "")]
             
