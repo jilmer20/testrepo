@@ -2,7 +2,6 @@
 # coding: utf-8
 
 # In[ ]:
-
 import os
 import math
 import pandas as pd
@@ -22,6 +21,14 @@ modo_app = st.sidebar.radio("Selecciona el perfil:", [
     "📱 Registro de Visitas (Vendedor)", 
     "🔐 Panel Admin / Auditoría"
 ])
+
+st.sidebar.divider()
+
+# BOTÓN DE RECARGA DE DATOS (Vacía la caché de Streamlit para leer el nuevo Excel)
+if st.sidebar.button("🔄 Recargar Datos del Excel", use_container_width=True):
+    st.cache_data.clear()
+    st.sidebar.success("¡Caché borrada! Leyendo la versión más reciente del Excel...")
+    st.rerun()
 
 # -----------------------------------------------------------------------------
 # 2. FUNCIONES DE APOYO Y CÁLCULO DE DISTANCIA
@@ -44,7 +51,7 @@ def cargar_prospectos():
         ruta_excel = r"D:\Usuarios\jmontesdeoca\Desktop\GeoLab\Exp2\Asignaciones\Prospectos_Asignados_y_Desbordamiento.xlsx"
     df = pd.read_excel(ruta_excel, sheet_name="Prospectos_Asignados")
     
-    # Limpieza previa de nombres de columnas (elimina espacios accidentales al inicio/final)
+    # Limpieza previa de nombres de columnas (elimina espacios accidentales)
     df.columns = df.columns.str.strip()
     return df
 
@@ -72,8 +79,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         st.error("❌ No se encontró el archivo 'Prospectos_Asignados_y_Desbordamiento.xlsx' en el servidor.")
         st.stop()
 
-    # 1. PASO 1: SELECCIÓN DE SUCURSAL (LÓGICA CORREGIDA Y ROBUSTA)
-    # -------------------------------------------------------------------------
+    # 1. PASO 1: SELECCIÓN DE SUCURSAL
     columnas_lower = {col.lower(): col for col in df_prospectos.columns}
     
     if 'sucursal' in columnas_lower:
@@ -81,7 +87,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
     elif 'estado' in columnas_lower:
         col_sucursal = columnas_lower['estado']
     else:
-        col_sucursal = df_prospectos.columns[0] # Fallback de seguridad
+        col_sucursal = df_prospectos.columns[0]
 
     sucursales_disponibles = sorted(df_prospectos[col_sucursal].dropna().astype(str).unique())
     
@@ -91,7 +97,6 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
     df_sucursal = df_prospectos[df_prospectos[col_sucursal].astype(str) == sucursal_sel].copy()
 
     # 2. PASO 2: SELECCIÓN DE ASESOR DE DICHA SUCURSAL
-    # -------------------------------------------------------------------------
     if 'id-nombre' in columnas_lower:
         col_asesor = columnas_lower['id-nombre']
     elif 'id_vendedor' in columnas_lower:
@@ -149,7 +154,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         st.link_button("🗺️ IR (Abrir Ruta en Google Maps)", url_gmaps_navegacion, use_container_width=True)
 
         st.divider()
-        st.subheader("🛰️️ Validación de Coordenada GPS")
+        st.subheader("🛰️ Validación de Coordenada GPS")
 
         loc = get_geolocation()
 
