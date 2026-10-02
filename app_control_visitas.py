@@ -2,8 +2,10 @@
 # coding: utf-8
 
 # In[ ]:
+
 import os
 import math
+import re
 import pandas as pd
 from datetime import datetime
 import streamlit as st
@@ -24,7 +26,7 @@ modo_app = st.sidebar.radio("Selecciona el perfil:", [
 
 st.sidebar.divider()
 
-# BOTÓN DE RECARGA DE DATOS (Vacía la caché de Streamlit para leer el nuevo Excel)
+# BOTÓN DE RECARGA DE DATOS
 if st.sidebar.button("🔄 Recargar Datos del Excel", use_container_width=True):
     st.cache_data.clear()
     st.sidebar.success("¡Caché borrada! Leyendo la versión más reciente del Excel...")
@@ -44,6 +46,13 @@ def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return round(R * c, 2)
 
+def limpiar_formato_rif(rif_raw):
+    """Elimina guiones, espacios y convierte a mayúsculas para guardar un RIF limpio."""
+    if not rif_raw:
+        return ""
+    rif_limpio = re.sub(r'[^A-Za-z0-9]', '', str(rif_raw)).upper()
+    return rif_limpio
+
 @st.cache_data
 def cargar_prospectos():
     ruta_excel = "Prospectos_Asignados_y_Desbordamiento.xlsx"
@@ -56,21 +65,16 @@ def cargar_prospectos():
     return df
 
 def obtener_comercios_finalizados():
-    """
-    Obtiene la lista de comercios que ya deben ser ELIMINADOS de la lista:
-    1. Aquellos con visita Efectiva o Local No Existe.
-    2. Aquellos con 2 o más intentos fallidos (Cerrado / No desea ser visitado).
-    """
     if os.path.exists(RUTA_AUDITORIA):
         try:
             df_aud = pd.read_csv(RUTA_AUDITORIA)
             if 'Comercio' in df_aud.columns and 'Estatus' in df_aud.columns:
-                estatus_reintento = ["Cerrado temporalmente", "No desea ser visitado"]
+                estatus_reintento = ["Cerrado temporalmente", "No desea ser visitado", "Cerrado", "No interesado"]
                 
                 # 1. Eliminar si fue venta efectiva o local no existe
                 definitivos = df_aud[~df_aud['Estatus'].isin(estatus_reintento)]['Comercio'].unique().tolist()
                 
-                # 2. Contar reintentos en 'Cerrado' o 'No desea ser visitado'
+                # 2. Contar reintentos en 'Cerrado' o 'No interesado'
                 df_reintentos = df_aud[df_aud['Estatus'].isin(estatus_reintento)]
                 conteo_reintentos = df_reintentos.groupby('Comercio').size()
                 
@@ -83,7 +87,6 @@ def obtener_comercios_finalizados():
     return []
 
 def obtener_conteo_visitas_comercio(comercio_nombre):
-    """Retorna cuántas veces se ha registrado previamente una visita a este comercio."""
     if os.path.exists(RUTA_AUDITORIA):
         try:
             df_aud = pd.read_csv(RUTA_AUDITORIA)
@@ -117,10 +120,8 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         col_sucursal = df_prospectos.columns[0]
 
     sucursales_disponibles = sorted(df_prospectos[col_sucursal].dropna().astype(str).unique())
-    
     sucursal_sel = st.selectbox("🏢 1. Selecciona tu Sucursal:", sucursales_disponibles)
 
-    # Filtrar el DataFrame según la Sucursal elegida
     df_sucursal = df_prospectos[df_prospectos[col_sucursal].astype(str) == sucursal_sel].copy()
 
     # 2. PASO 2: SELECCIÓN DE ASESOR DE DICHA SUCURSAL
@@ -132,12 +133,11 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         col_asesor = 'Asesor'
 
     vendedores_disponibles = sorted(df_sucursal[col_asesor].dropna().astype(str).unique())
-    
     vendedor_sel = st.selectbox("👤 2. Selecciona tu Asesor (ID - Nombre):", vendedores_disponibles)
 
     df_vendedor_total = df_sucursal[df_sucursal[col_asesor].astype(str) == vendedor_sel].copy()
     
-    # FILTRADO DINÁMICO: Excluir comercios completados o descartados tras 2da visita
+    # FILTRADO DINÁMICO
     completados_lista = obtener_comercios_finalizados()
     col_nombre = columnas_lower.get('nombre', 'Nombre')
     
@@ -163,7 +163,6 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         lat_target = float(str(row_prospecto[col_lat]).replace(',', '.'))
         lon_target = float(str(row_prospecto[col_lon]).replace(',', '.'))
 
-        # Revisar cuántas veces ha sido visitado este local previamente
         num_intentos_previos = obtener_conteo_visitas_comercio(prospecto_sel_nombre)
         if num_intentos_previos == 1:
             st.warning("⚠️ **ATENCIÓN:** Este comercio se encuentra en **SEGUNDO INTENTO DE VISITA** (Fue marcado anteriormente como Cerrado o No desea ser visitado).")
@@ -181,7 +180,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
             col_b.markdown(f"**🌐 Sitio Web:** {web_val}")
             col_b.markdown(f"**📍 Coordenadas:** `{lat_target}, {lon_target}`")
 
-        # BOTÓN DE NAVEGACIÓN DIRECTA EN GOOGLE MAPS
+        # NAVEGACIÓN GOOGLE MAPS
         url_gmaps_navegacion = f"https://www.google.com/maps/dir/?api=1&destination={lat_target},{lon_target}"
         st.link_button("🗺️ IR (Abrir Ruta en Google Maps)", url_gmaps_navegacion, use_container_width=True)
 
@@ -197,7 +196,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
             st.success(f"📍 GPS Capturado: `{lat_vendedor:.5f}, {lon_vendedor:.5f}`")
             
             distancia_m = calcular_distancia_haversine(lat_vendedor, lon_vendedor, lat_target, lon_target)
-            RADIO_MAXIMO_M = 40.0  # Radio máximo permitido en metros
+            RADIO_MAXIMO_M = 40.0  # Radio máximo permitido
             
             st.metric(label="Distancia al Establecimiento", value=f"{distancia_m} metros")
             
@@ -211,15 +210,18 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                         "Efectiva / Visita realizada", 
                         "Cerrado",
                         "Clausurado",
-                        "No desea ser visitado", 
+                        "No interesado", 
                         "Local no existe / Cambió de rubro"
                     ])
                     
-                    rif_cliente = st.text_input("📄 Número de RIF del Cliente (Ej: J-12345678-0):")
+                    # CAMPO RIF CON INDICACIÓN SIN GUIÓN
+                    rif_cliente_input = st.text_input("📄 Número de RIF del Cliente (Sin guiones, Ej: J123456780) (* Obligatorio para visitas efectivas):")
                     telefono_add = st.text_input("📞 Teléfono Adicional / Contacto Secundario:")
                     
                     st.markdown("---")
                     st.markdown("#### 📊 Encuesta de Mercado (Opcional)")
+                    
+                    trabaja_bebidas_alimentos = st.radio("¿Vende o trabaja Ud. con Bebidas y Alimentos?", ["Sin responder", "SI", "NO"], horizontal=True)
                     
                     trabaja_embutidos = st.radio("¿Vende o trabaja Ud. con embutidos?", ["Sin responder", "SI", "NO"], horizontal=True)
                     
@@ -229,11 +231,24 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                         
                     posee_nevera = st.radio("¿Posee Nevera / Exhibidor Refrigerado?", ["Sin responder", "SI", "NO"], horizontal=True)
                     
+                    posee_rebanadora = st.radio("¿Posee rebanadora?", ["Sin responder", "SI", "NO"], horizontal=True)
+                    
                     observaciones = st.text_area("Observaciones de la visita:")
                     
                     submit = st.form_submit_button("📌 Registrar Visita y Guardar Check-in")
                     
                     if submit:
+                        # VALIDACIÓN Y LIMPIEZA DEL RIF
+                        rif_limpio = limpiar_formato_rif(rif_cliente_input)
+                        
+                        if estatus_visita == "Efectiva / Visita realizada":
+                            if not rif_limpio:
+                                st.error("❌ **CAMPO OBLIGATORIO:** Debes ingresar el RIF del cliente para registrar una visita Efectiva.")
+                                st.stop()
+                            elif len(rif_limpio) < 7:
+                                st.error("❌ **FORMATO INVÁLIDO:** Por favor ingresa un RIF válido sin guiones (Ejemplo: J123456780).")
+                                st.stop()
+
                         registro = pd.DataFrame([{
                             'Fecha_Hora': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             'Sucursal': sucursal_sel,
@@ -241,11 +256,13 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                             'Comercio': prospecto_sel_nombre,
                             'Estatus': estatus_visita,
                             'Intento_Numero': num_intentos_previos + 1,
-                            'RIF_Cliente': rif_cliente,
+                            'RIF_Cliente': rif_limpio,
                             'Telefono_Adicional': telefono_add,
+                            'Trabaja_Bebidas_Alimentos': trabaja_bebidas_alimentos,
                             'Trabaja_Embutidos': trabaja_embutidos,
                             'Cuales_Embutidos': cuales_embutidos,
                             'Posee_Nevera': posee_nevera,
+                            'Posee_Rebanadora': posee_rebanadora,
                             'Distancia_Metros': distancia_m,
                             'Lat_GPS_Vendedor': lat_vendedor,
                             'Lon_GPS_Vendedor': lon_vendedor,
@@ -260,7 +277,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                         st.cache_data.clear()
                         st.balloons()
                         
-                        if estatus_visita in ["Cerrado temporalmente", "No desea ser visitado"] and num_intentos_previos == 0:
+                        if estatus_visita in ["Cerrado", "No interesado"] and num_intentos_previos == 0:
                             st.warning("⚠️ **Visita Registrada (1er Intento):** El prospecto se mantendrá en tu lista para una segunda visita de verificación.")
                         else:
                             st.success("🎉 **¡Visita Auditada!** El prospecto ha sido descontado/completado de tu lista.")
