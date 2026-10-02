@@ -34,11 +34,13 @@ st.sidebar.divider()
 
 if st.sidebar.button("🔄 Recargar Datos del Excel", use_container_width=True):
     st.cache_data.clear()
+    if 'foto_temp_bytes' in st.session_state:
+        del st.session_state['foto_temp_bytes']
     st.sidebar.success("¡Caché borrada! Leyendo la versión más reciente del Excel...")
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 2. FUNCIONES DE APOYO, CÁLCULO Y COMPRESIÓN DE IMÁGENES
+# 2. FUNCIONES DE APOYO Y OPTIMIZACIÓN
 # -----------------------------------------------------------------------------
 def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
     R = 6371000  # Radio terrestre en metros
@@ -56,12 +58,15 @@ def limpiar_formato_rif(rif_raw):
         return ""
     return re.sub(r'[^A-Za-z0-9]', '', str(rif_raw)).upper()
 
-def guardar_foto_evidencia(archivo_foto, comercio_nombre, max_dimension=1280, calidad=75):
-    """
-    Captura los bytes de la foto, la redimensiona y comprime con Pillow (PIL),
-    reduciondo el peso de ~4MB a ~150KB de manera instantánea.
-    """
-    if archivo_foto is None:
+# CALLBACK: Se ejecuta en milisegundos cuando la cámara del celular captura la foto
+def procesar_captura_camara():
+    if st.session_state.get('widget_camara') is not None:
+        # Guardar los bytes de la foto inmediatamente en session_state
+        st.session_state['foto_temp_bytes'] = st.session_state['widget_camara'].getvalue()
+
+def guardar_foto_evidencia(bytes_imagen, comercio_nombre, max_dimension=1280, calidad=75):
+    """Redimensiona y comprime la foto desde el session_state."""
+    if not bytes_imagen:
         return ""
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -70,33 +75,18 @@ def guardar_foto_evidencia(archivo_foto, comercio_nombre, max_dimension=1280, ca
     ruta_completa = os.path.join(CARPETA_FOTOS, nombre_archivo)
     
     try:
-        # 1. Leer los bytes entregados por la cámara
-        if hasattr(archivo_foto, 'getvalue'):
-            contenido = archivo_foto.getvalue()
-        elif hasattr(archivo_foto, 'read'):
-            contenido = archivo_foto.read()
-        else:
-            contenido = archivo_foto
+        imagen = Image.open(io.BytesIO(bytes_imagen))
+        imagen = ImageOps.exif_transpose(imagen) # Mantener orientación correcta
 
-        # 2. Abrir la imagen en memoria usando PIL
-        imagen = Image.open(io.BytesIO(contenido))
-        
-        # Corregir la orientación EXIF de la cámara móvil si es necesario
-        imagen = ImageOps.exif_transpose(imagen)
-
-        # Convertir a RGB (requerido para guardar en JPG en caso de ser PNG/RGBA)
         if imagen.mode in ("RGBA", "P"):
             imagen = imagen.convert("RGB")
 
-        # 3. Redimensionar manteniendo la relación de aspecto
         imagen.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
-
-        # 4. Guardar comprimida en disco con calidad optimizada
         imagen.save(ruta_completa, "JPEG", optimize=True, quality=calidad)
 
         return ruta_completa
     except Exception as e:
-        st.error(f"Error al procesar/comprimir la imagen: {e}")
+        st.error(f"Error procesando la foto: {e}")
         return ""
 
 @st.cache_data
@@ -235,13 +225,19 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                 ])
                 
                 # -------------------------------------------------------------
-                # SECCIÓN DE CAPTURA EXCLUSIVA EN VIVO (CÁMARA DIRECTA)
+                # CÁMARA CON EVENTO ON_CHANGE (PERSISTENCIA GARANTIZADA)
                 # -------------------------------------------------------------
                 st.markdown("#### 📸 Captura de Evidencia Fotográfica (En Vivo)")
-                st.caption("Captura la foto directamente desde el local para validar la visita presencial.")
                 
-                # Deshabilitamos st.file_uploader y forzamos el visor directo
-                foto_objeto = st.camera_input("Tomar foto del local en tiempo real")
+                st.camera_input(
+                    "Tomar foto del local en tiempo real",
+                    key="widget_camara",
+                    on_change=procesar_captura_camara
+                )
+
+                # Indicador visual si la foto ya se respaldó en memoria
+                if st.session_state.get('foto_temp_bytes'):
+                    st.success("✅ **Foto asegurada en memoria.** Lista para guardar.")
 
                 rif_cliente_input = st.text_input("📄 Número de RIF del Cliente (Sin guiones, Ej: J123456780) (* Obligatorio para visitas efectivas):")
                 telefono_add = st.text_input("📞 Teléfono Adicional / Contacto Secundario:")
@@ -270,17 +266,18 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                             st.stop()
 
                     # 2. VALIDACIÓN FOTO
-                    if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado", "Efectiva / Visita realizada"] and foto_objeto is None:
-                        st.error("❌ **FOTO REQUERIDA:** Debes tomar la foto de evidencia presencial con la cámara.")
+                    bytes_foto_respaldada = st.session_state.get('foto_temp_bytes', None)
+                    
+                    if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado", "Efectiva / Visita realizada"] and not bytes_foto_respaldada:
+                        st.error("❌ **FOTO REQUERIDA:** Debes tomar la foto de evidencia con la cámara antes de presionar el botón.")
                         st.stop()
 
                     # 3. GUARDAR Y COMPRIMIR FOTO EN DISCO
                     ruta_foto_guardada = ""
-                    if foto_objeto is not None:
-                        # Se comprime automáticamente a máximo 1280px y 75% calidad JPG
-                        ruta_foto_guardada = guardar_foto_evidencia(foto_objeto, prospecto_sel_nombre, max_dimension=1280, calidad=75)
+                    if bytes_foto_respaldada:
+                        ruta_foto_guardada = guardar_foto_evidencia(bytes_foto_respaldada, prospecto_sel_nombre, max_dimension=1280, calidad=75)
 
-                    # 4. GUARDAR REGISTRO CSV
+                    # 4. GUARDAR REGISTRO EN CSV
                     registro = pd.DataFrame([{
                         'Fecha_Hora': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         'Sucursal': sucursal_sel,
@@ -307,13 +304,17 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                     else:
                         registro.to_csv(RUTA_AUDITORIA, mode='a', header=False, index=False, encoding='utf-8-sig')
 
+                    # Limpiar la foto del session_state para la siguiente visita
+                    if 'foto_temp_bytes' in st.session_state:
+                        del st.session_state['foto_temp_bytes']
+
                     st.cache_data.clear()
                     st.balloons()
                     
                     if estatus_visita in ["Cerrado", "No interesado"] and num_intentos_previos == 0:
                         st.warning("⚠️ **Visita Registrada (1er Intento):** El prospecto se mantendrá en tu lista para una segunda visita de verificación.")
                     else:
-                        st.success("🎉 **¡Visita Auditada con Éxito!** El registro y la foto comprimida han sido guardados.")
+                        st.success("🎉 **¡Visita Auditada con Éxito!** Registro y foto guardados correctamente.")
                         
                     st.rerun()
             else:
