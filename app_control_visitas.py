@@ -54,8 +54,9 @@ def limpiar_formato_rif(rif_raw):
         return ""
     return re.sub(r'[^A-Za-z0-9]', '', str(rif_raw)).upper()
 
-def guardar_foto_evidencia(foto_bytes, comercio_nombre):
-    if not foto_bytes:
+def guardar_foto_evidencia(archivo_foto, comercio_nombre):
+    """Procesa tanto bytes como objetos de archivo de Streamlit (camera_input / file_uploader)."""
+    if archivo_foto is None:
         return ""
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -64,11 +65,19 @@ def guardar_foto_evidencia(foto_bytes, comercio_nombre):
     ruta_completa = os.path.join(CARPETA_FOTOS, nombre_archivo)
     
     try:
+        # Extraer bytes dependiendo del origen del widget
+        if hasattr(archivo_foto, 'getvalue'):
+            contenido = archivo_foto.getvalue()
+        elif hasattr(archivo_foto, 'read'):
+            contenido = archivo_foto.read()
+        else:
+            contenido = archivo_foto
+            
         with open(ruta_completa, "wb") as f:
-            f.write(foto_bytes)
+            f.write(contenido)
         return ruta_completa
     except Exception as e:
-        st.error(f"Error guardando foto: {e}")
+        st.error(f"Error al guardar la imagen en disco: {e}")
         return ""
 
 @st.cache_data
@@ -175,7 +184,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
             col_b.markdown(f"**📍 Coordenadas:** `{lat_target}, {lon_target}`")
 
         url_gmaps_navegacion = f"https://www.google.com/maps/dir/?api=1&destination={lat_target},{lon_target}"
-        st.link_button("🗺️️ IR (Abrir Ruta en Google Maps)", url_gmaps_navegacion, use_container_width=True)
+        st.link_button("🗺 IR (Abrir Ruta en Google Maps)", url_gmaps_navegacion, use_container_width=True)
 
         st.divider()
         st.subheader("🛰️ Validación de Coordenada GPS")
@@ -196,9 +205,6 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
             if distancia_m <= RADIO_MAXIMO_M:
                 st.success("✅ **CHECK-IN HABILITADO:** Confirmado que estás presencialmente en el comercio.")
                 
-                # -------------------------------------------------------------
-                # MANEJO DE FOTO FUERA DE FORMULARIO CON SESSION STATE
-                # -------------------------------------------------------------
                 st.markdown("### 📝 Formulario de Registro")
                 
                 estatus_visita = st.selectbox("Estatus de la Visita (*):", [
@@ -209,13 +215,26 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                     "Local no existe / Cambió de rubro"
                 ])
                 
-                st.markdown("#### 📷 Captura de Evidencia (Opcional / Requerida según Estatus)")
-                foto_input = st.camera_input("Tomar foto desde la cámara del teléfono")
-
-                # Guardar los bytes de la foto en la sesión
-                if foto_input is not None:
-                    st.session_state['foto_bytes'] = foto_input.getvalue()
-                    st.success("📸 Foto capturada correctamente.")
+                # -------------------------------------------------------------
+                # SECCIÓN DE CAPTURA CON DOBLE MÉTODOLOGÍA PARA MÓVILES
+                # -------------------------------------------------------------
+                st.markdown("#### 📷 Captura de Evidencia Fotográfica")
+                
+                metodo_foto = st.radio("Selecciona cómo adjuntar la foto:", [
+                    "📁 Subir Foto / Tomar con Cámara Nativa (Recomendado Móvil)",
+                    "📸 Usar Cámara Directa de Streamlit"
+                ])
+                
+                foto_objeto = None
+                
+                if "📁" in metodo_foto:
+                    foto_objeto = st.file_uploader(
+                        "Selecciona o toma una foto:", 
+                        type=["jpg", "jpeg", "png"],
+                        help="Al presionar en el teléfono te dará la opción de tomar una foto directamente con la app de cámara nativa."
+                    )
+                else:
+                    foto_objeto = st.camera_input("Capturar Evidencia")
 
                 rif_cliente_input = st.text_input("📄 Número de RIF del Cliente (Sin guiones, Ej: J123456780) (* Obligatorio para visitas efectivas):")
                 telefono_add = st.text_input("📞 Teléfono Adicional / Contacto Secundario:")
@@ -230,7 +249,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                 posee_rebanadora = st.radio("¿Posee rebanadora?", ["Sin responder", "SI", "NO"], horizontal=True)
                 observaciones = st.text_area("Observaciones de la visita:")
                 
-                # BOTÓN DIRECTO (SIN FORMULARIO BLOQUEANTE)
+                # BOTÓN DE PROCESAMIENTO DIRECTO
                 if st.button("📌 Registrar Visita y Guardar Check-in", type="primary", use_container_width=True):
                     
                     # 1. VALIDACIÓN RIF
@@ -244,15 +263,14 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                             st.stop()
 
                     # 2. VALIDACIÓN FOTO
-                    bytes_foto = st.session_state.get('foto_bytes', None)
-                    if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado"] and not bytes_foto:
-                        st.error("❌ **FOTO REQUERIDA:** Para marcar esta opción debes tomar una foto de evidencia.")
+                    if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado"] and foto_objeto is None:
+                        st.error("❌ **FOTO REQUERIDA:** Para marcar esta opción debes tomar o adjuntar una foto de evidencia.")
                         st.stop()
 
-                    # 3. GUARDAR FOTO
+                    # 3. GUARDAR FOTO EN DISCO
                     ruta_foto_guardada = ""
-                    if bytes_foto:
-                        ruta_foto_guardada = guardar_foto_evidencia(bytes_foto, prospecto_sel_nombre)
+                    if foto_objeto is not None:
+                        ruta_foto_guardada = guardar_foto_evidencia(foto_objeto, prospecto_sel_nombre)
 
                     # 4. GUARDAR REGISTRO CSV
                     registro = pd.DataFrame([{
@@ -280,10 +298,6 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                         registro.to_csv(RUTA_AUDITORIA, index=False, encoding='utf-8-sig')
                     else:
                         registro.to_csv(RUTA_AUDITORIA, mode='a', header=False, index=False, encoding='utf-8-sig')
-                    
-                    # Limpiar foto de la sesión tras guardar exitosamente
-                    if 'foto_bytes' in st.session_state:
-                        del st.session_state['foto_bytes']
 
                     st.cache_data.clear()
                     st.balloons()
