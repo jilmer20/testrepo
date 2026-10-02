@@ -6,8 +6,10 @@
 import os
 import math
 import re
+import io
 import pandas as pd
 from datetime import datetime
+from PIL import Image, ImageOps
 import streamlit as st
 from streamlit_js_eval import get_geolocation
 
@@ -36,7 +38,7 @@ if st.sidebar.button("🔄 Recargar Datos del Excel", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 2. FUNCIONES DE APOYO Y CÁLCULO DE DISTANCIA
+# 2. FUNCIONES DE APOYO, CÁLCULO Y COMPRESIÓN DE IMÁGENES
 # -----------------------------------------------------------------------------
 def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
     R = 6371000  # Radio terrestre en metros
@@ -54,8 +56,11 @@ def limpiar_formato_rif(rif_raw):
         return ""
     return re.sub(r'[^A-Za-z0-9]', '', str(rif_raw)).upper()
 
-def guardar_foto_evidencia(archivo_foto, comercio_nombre):
-    """Procesa tanto bytes como objetos de archivo de Streamlit (camera_input / file_uploader)."""
+def guardar_foto_evidencia(archivo_foto, comercio_nombre, max_dimension=1280, calidad=75):
+    """
+    Captura los bytes de la foto, la redimensiona y comprime con Pillow (PIL),
+    reduciondo el peso de ~4MB a ~150KB de manera instantánea.
+    """
     if archivo_foto is None:
         return ""
     
@@ -65,19 +70,33 @@ def guardar_foto_evidencia(archivo_foto, comercio_nombre):
     ruta_completa = os.path.join(CARPETA_FOTOS, nombre_archivo)
     
     try:
-        # Extraer bytes dependiendo del origen del widget
+        # 1. Leer los bytes entregados por la cámara
         if hasattr(archivo_foto, 'getvalue'):
             contenido = archivo_foto.getvalue()
         elif hasattr(archivo_foto, 'read'):
             contenido = archivo_foto.read()
         else:
             contenido = archivo_foto
-            
-        with open(ruta_completa, "wb") as f:
-            f.write(contenido)
+
+        # 2. Abrir la imagen en memoria usando PIL
+        imagen = Image.open(io.BytesIO(contenido))
+        
+        # Corregir la orientación EXIF de la cámara móvil si es necesario
+        imagen = ImageOps.exif_transpose(imagen)
+
+        # Convertir a RGB (requerido para guardar en JPG en caso de ser PNG/RGBA)
+        if imagen.mode in ("RGBA", "P"):
+            imagen = imagen.convert("RGB")
+
+        # 3. Redimensionar manteniendo la relación de aspecto
+        imagen.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
+
+        # 4. Guardar comprimida en disco con calidad optimizada
+        imagen.save(ruta_completa, "JPEG", optimize=True, quality=calidad)
+
         return ruta_completa
     except Exception as e:
-        st.error(f"Error al guardar la imagen en disco: {e}")
+        st.error(f"Error al procesar/comprimir la imagen: {e}")
         return ""
 
 @st.cache_data
@@ -216,25 +235,13 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                 ])
                 
                 # -------------------------------------------------------------
-                # SECCIÓN DE CAPTURA CON DOBLE MÉTODOLOGÍA PARA MÓVILES
+                # SECCIÓN DE CAPTURA EXCLUSIVA EN VIVO (CÁMARA DIRECTA)
                 # -------------------------------------------------------------
-                st.markdown("#### 📷 Captura de Evidencia Fotográfica")
+                st.markdown("#### 📸 Captura de Evidencia Fotográfica (En Vivo)")
+                st.caption("Captura la foto directamente desde el local para validar la visita presencial.")
                 
-                metodo_foto = st.radio("Selecciona cómo adjuntar la foto:", [
-                    "📁 Subir Foto / Tomar con Cámara Nativa (Recomendado Móvil)",
-                    "📸 Usar Cámara Directa de Streamlit"
-                ])
-                
-                foto_objeto = None
-                
-                if "📁" in metodo_foto:
-                    foto_objeto = st.file_uploader(
-                        "Selecciona o toma una foto:", 
-                        type=["jpg", "jpeg", "png"],
-                        help="Al presionar en el teléfono te dará la opción de tomar una foto directamente con la app de cámara nativa."
-                    )
-                else:
-                    foto_objeto = st.camera_input("Capturar Evidencia")
+                # Deshabilitamos st.file_uploader y forzamos el visor directo
+                foto_objeto = st.camera_input("Tomar foto del local en tiempo real")
 
                 rif_cliente_input = st.text_input("📄 Número de RIF del Cliente (Sin guiones, Ej: J123456780) (* Obligatorio para visitas efectivas):")
                 telefono_add = st.text_input("📞 Teléfono Adicional / Contacto Secundario:")
@@ -263,14 +270,15 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                             st.stop()
 
                     # 2. VALIDACIÓN FOTO
-                    if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado"] and foto_objeto is None:
-                        st.error("❌ **FOTO REQUERIDA:** Para marcar esta opción debes tomar o adjuntar una foto de evidencia.")
+                    if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado", "Efectiva / Visita realizada"] and foto_objeto is None:
+                        st.error("❌ **FOTO REQUERIDA:** Debes tomar la foto de evidencia presencial con la cámara.")
                         st.stop()
 
-                    # 3. GUARDAR FOTO EN DISCO
+                    # 3. GUARDAR Y COMPRIMIR FOTO EN DISCO
                     ruta_foto_guardada = ""
                     if foto_objeto is not None:
-                        ruta_foto_guardada = guardar_foto_evidencia(foto_objeto, prospecto_sel_nombre)
+                        # Se comprime automáticamente a máximo 1280px y 75% calidad JPG
+                        ruta_foto_guardada = guardar_foto_evidencia(foto_objeto, prospecto_sel_nombre, max_dimension=1280, calidad=75)
 
                     # 4. GUARDAR REGISTRO CSV
                     registro = pd.DataFrame([{
@@ -305,7 +313,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                     if estatus_visita in ["Cerrado", "No interesado"] and num_intentos_previos == 0:
                         st.warning("⚠️ **Visita Registrada (1er Intento):** El prospecto se mantendrá en tu lista para una segunda visita de verificación.")
                     else:
-                        st.success("🎉 **¡Visita Auditada con Éxito!** El registro y la foto han sido guardados.")
+                        st.success("🎉 **¡Visita Auditada con Éxito!** El registro y la foto comprimida han sido guardados.")
                         
                     st.rerun()
             else:
