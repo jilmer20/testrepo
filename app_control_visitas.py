@@ -43,6 +43,9 @@ def cargar_prospectos():
     if not os.path.exists(ruta_excel):
         ruta_excel = r"D:\Usuarios\jmontesdeoca\Desktop\GeoLab\Exp2\Asignaciones\Prospectos_Asignados_y_Desbordamiento.xlsx"
     df = pd.read_excel(ruta_excel, sheet_name="Prospectos_Asignados")
+    
+    # Limpieza previa de nombres de columnas (elimina espacios accidentales al inicio/final)
+    df.columns = df.columns.str.strip()
     return df
 
 def obtener_comercio_visitados():
@@ -69,8 +72,17 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         st.error("❌ No se encontró el archivo 'Prospectos_Asignados_y_Desbordamiento.xlsx' en el servidor.")
         st.stop()
 
-    # 1. PASO 1: SELECCIÓN DE SUCURSAL
-    col_sucursal = 'Sucursal' if 'Sucursal' in df_prospectos.columns else 'Sucursal'
+    # 1. PASO 1: SELECCIÓN DE SUCURSAL (LÓGICA CORREGIDA Y ROBUSTA)
+    # -------------------------------------------------------------------------
+    columnas_lower = {col.lower(): col for col in df_prospectos.columns}
+    
+    if 'sucursal' in columnas_lower:
+        col_sucursal = columnas_lower['sucursal']
+    elif 'estado' in columnas_lower:
+        col_sucursal = columnas_lower['estado']
+    else:
+        col_sucursal = df_prospectos.columns[0] # Fallback de seguridad
+
     sucursales_disponibles = sorted(df_prospectos[col_sucursal].dropna().astype(str).unique())
     
     sucursal_sel = st.selectbox("🏢 1. Selecciona tu Sucursal:", sucursales_disponibles)
@@ -79,7 +91,14 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
     df_sucursal = df_prospectos[df_prospectos[col_sucursal].astype(str) == sucursal_sel].copy()
 
     # 2. PASO 2: SELECCIÓN DE ASESOR DE DICHA SUCURSAL
-    col_asesor = 'ID-Nombre' if 'ID-Nombre' in df_sucursal.columns else 'id_vendedor'
+    # -------------------------------------------------------------------------
+    if 'id-nombre' in columnas_lower:
+        col_asesor = columnas_lower['id-nombre']
+    elif 'id_vendedor' in columnas_lower:
+        col_asesor = columnas_lower['id_vendedor']
+    else:
+        col_asesor = 'Asesor'
+
     vendedores_disponibles = sorted(df_sucursal[col_asesor].dropna().astype(str).unique())
     
     vendedor_sel = st.selectbox("👤 2. Selecciona tu Asesor (ID - Nombre):", vendedores_disponibles)
@@ -88,7 +107,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
     
     # FILTRADO DINÁMICO: Excluir comercios que ya han sido visitados
     visitados = obtener_comercio_visitados()
-    col_nombre = 'Nombre' if 'Nombre' in df_vendedor_total.columns else 'nombre'
+    col_nombre = columnas_lower.get('nombre', 'Nombre')
     
     df_vendedor_pendiente = df_vendedor_total[~df_vendedor_total[col_nombre].isin(visitados)].copy()
     
@@ -102,8 +121,8 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         st.balloons()
         st.success("🎉 **¡Felicidades!** Has completado la visita de todos tus prospectos asignados.")
     else:
-        col_lat = 'Latitud' if 'Latitud' in df_vendedor_pendiente.columns else 'lat'
-        col_lon = 'Longitud' if 'Longitud' in df_vendedor_pendiente.columns else 'lon'
+        col_lat = columnas_lower.get('latitud', columnas_lower.get('lat', 'Latitud'))
+        col_lon = columnas_lower.get('longitud', columnas_lower.get('lon', 'Longitud'))
 
         prospecto_sel_nombre = st.selectbox("🏪 Selecciona el comercio a visitar:", df_vendedor_pendiente[col_nombre].values)
 
@@ -120,7 +139,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
             tel_val = str(row_prospecto.get('Telefono', row_prospecto.get('telefono', row_prospecto.get('phone', 'No disponible'))))
             web_val = str(row_prospecto.get('Sitio_Web', row_prospecto.get('website', row_prospecto.get('sitio_web', 'No disponible'))))
             
-            col_a.markdown(f"**🏷️️ Rubro:** {rubro_val}")
+            col_a.markdown(f"**🏷 Rubro:** {rubro_val}")
             col_a.markdown(f"**📞 Teléfono:** {tel_val}")
             col_b.markdown(f"**🌐 Sitio Web:** {web_val}")
             col_b.markdown(f"**📍 Coordenadas:** `{lat_target}, {lon_target}`")
@@ -130,7 +149,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         st.link_button("🗺️ IR (Abrir Ruta en Google Maps)", url_gmaps_navegacion, use_container_width=True)
 
         st.divider()
-        st.subheader("🛰️ Validación de Coordenada GPS")
+        st.subheader("🛰️️ Validación de Coordenada GPS")
 
         loc = get_geolocation()
 
