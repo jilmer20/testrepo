@@ -70,7 +70,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         st.stop()
 
     # 1. PASO 1: SELECCIÓN DE SUCURSAL
-    col_sucursal = 'Sucursal' if 'Sucursal' in df_prospectos.columns else 'Estado'
+    col_sucursal = 'Sucursal' if 'Sucursal' in df_prospectos.columns else 'Sucursal'
     sucursales_disponibles = sorted(df_prospectos[col_sucursal].dropna().astype(str).unique())
     
     sucursal_sel = st.selectbox("🏢 1. Selecciona tu Sucursal:", sucursales_disponibles)
