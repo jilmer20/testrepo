@@ -25,6 +25,10 @@ CARPETA_FOTOS = "Fotos_Evidencia"
 if not os.path.exists(CARPETA_FOTOS):
     os.makedirs(CARPETA_FOTOS)
 
+# Inicializar clave dinámica para el widget de la cámara si no existe
+if 'cam_key_id' not in st.session_state:
+    st.session_state['cam_key_id'] = 0
+
 st.sidebar.title("📌 Menú GeoLab")
 modo_app = st.sidebar.radio("Selecciona el perfil:", [
     "📱 Registro de Visitas (Vendedor)", 
@@ -37,6 +41,7 @@ if st.sidebar.button("🔄 Recargar Datos del Excel", use_container_width=True):
     st.cache_data.clear()
     if 'foto_comprimida_bytes' in st.session_state:
         del st.session_state['foto_comprimida_bytes']
+    st.session_state['cam_key_id'] += 1
     st.sidebar.success("¡Caché borrada! Leyendo la versión más reciente del Excel...")
     st.rerun()
 
@@ -46,10 +51,8 @@ if st.sidebar.button("🔄 Recargar Datos del Excel", use_container_width=True):
 def obtener_fecha_hora_actual():
     """Retorna la fecha y hora exacta en zona horaria de Venezuela (UTC-4)."""
     try:
-        # Intenta usar la zona horaria oficial de Caracas
         ahora_caracas = datetime.now(ZoneInfo("America/Caracas"))
     except Exception:
-        # Fallback de respaldo (Restar 4 horas directamente a UTC)
         ahora_caracas = datetime.utcnow() - timedelta(hours=4)
     return ahora_caracas.strftime("%Y-%m-%d %H:%M:%S")
 
@@ -70,12 +73,11 @@ def limpiar_formato_rif(rif_raw):
     return re.sub(r'[^A-Za-z0-9]', '', str(rif_raw)).upper()
 
 def comprimir_y_procesar_foto(bytes_imagen, max_dimension=1280, calidad=75):
-    """Comprime la foto recibida a ~150KB en memoria de forma instantánea."""
     if not bytes_imagen:
         return None
     try:
         imagen = Image.open(io.BytesIO(bytes_imagen))
-        imagen = ImageOps.exif_transpose(imagen) # Respetar orientación vertical del celular
+        imagen = ImageOps.exif_transpose(imagen)
 
         if imagen.mode in ("RGBA", "P"):
             imagen = imagen.convert("RGB")
@@ -90,7 +92,6 @@ def comprimir_y_procesar_foto(bytes_imagen, max_dimension=1280, calidad=75):
         return None
 
 def guardar_foto_disco(bytes_comprimidos, comercio_nombre):
-    """Guarda la foto optimizada de session_state al disco."""
     if not bytes_comprimidos:
         return ""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -239,7 +240,9 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                 
                 st.markdown("#### 📸 Captura de Evidencia Fotográfica (En Vivo)")
                 
-                foto_camara = st.camera_input("Tomar foto del local en tiempo real")
+                # USAMOS KEY DINÁMICA PARA REINICIAR LA CÁMARA DESPUÉS DE CADA CHECK-IN
+                cam_key = f"cam_widget_{st.session_state['cam_key_id']}"
+                foto_camara = st.camera_input("Tomar foto del local en tiempo real", key=cam_key)
 
                 if foto_camara is not None:
                     bytes_raw = foto_camara.getvalue()
@@ -317,9 +320,12 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                     else:
                         registro.to_csv(RUTA_AUDITORIA, mode='a', header=False, index=False, encoding='utf-8-sig')
 
-                    # Limpiar estado de la foto tras guardar con éxito
+                    # 🧹 LIMPIEZA TOTAL DE MEMORIA Y REINICIO DE CÁMARA TRAS REGISTRO EXITOSO
                     if 'foto_comprimida_bytes' in st.session_state:
                         del st.session_state['foto_comprimida_bytes']
+                    
+                    # Incrementar el identificador para destruir la foto anterior de la cámara
+                    st.session_state['cam_key_id'] += 1
 
                     st.cache_data.clear()
                     st.balloons()
@@ -327,7 +333,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                     if estatus_visita in ["Cerrado", "No interesado"] and num_intentos_previos == 0:
                         st.warning("⚠️ **Visita Registrada (1er Intento):** El prospecto se mantendrá en tu lista para una segunda visita de verificación.")
                     else:
-                        st.success("🎉 **¡Visita Auditada con Éxito!** Registro y foto guardados correctamente.")
+                        st.success("🎉 **¡Visita Auditada con Éxito!** Registro guardado. Lista de prospectos actualizada.")
                         
                     st.rerun()
             else:
