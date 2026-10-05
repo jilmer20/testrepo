@@ -34,13 +34,14 @@ st.sidebar.divider()
 
 if st.sidebar.button("🔄 Recargar Datos del Excel", use_container_width=True):
     st.cache_data.clear()
-    if 'foto_temp_bytes' in st.session_state:
-        del st.session_state['foto_temp_bytes']
+    for key in ['foto_comprimida_bytes', 'ruta_foto_temp']:
+        if key in st.session_state:
+            del st.session_state[key]
     st.sidebar.success("¡Caché borrada! Leyendo la versión más reciente del Excel...")
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 2. FUNCIONES DE APOYO Y OPTIMIZACIÓN
+# 2. FUNCIONES DE APOYO Y OPTIMIZACIÓN DE IMAGEN
 # -----------------------------------------------------------------------------
 def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
     R = 6371000  # Radio terrestre en metros
@@ -58,36 +59,38 @@ def limpiar_formato_rif(rif_raw):
         return ""
     return re.sub(r'[^A-Za-z0-9]', '', str(rif_raw)).upper()
 
-# CALLBACK: Se ejecuta en milisegundos cuando la cámara del celular captura la foto
-def procesar_captura_camara():
-    if st.session_state.get('widget_camara') is not None:
-        # Guardar los bytes de la foto inmediatamente en session_state
-        st.session_state['foto_temp_bytes'] = st.session_state['widget_camara'].getvalue()
-
-def guardar_foto_evidencia(bytes_imagen, comercio_nombre, max_dimension=1280, calidad=75):
-    """Redimensiona y comprime la foto desde el session_state."""
+def comprimir_y_procesar_foto(bytes_imagen, max_dimension=1280, calidad=75):
+    """Comprime la foto recibida a ~150KB en memoria de forma instantánea."""
     if not bytes_imagen:
-        return ""
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    nombre_limpio = re.sub(r'[^A-Za-z0-9]', '_', str(comercio_nombre))
-    nombre_archivo = f"{timestamp}_{nombre_limpio}.jpg"
-    ruta_completa = os.path.join(CARPETA_FOTOS, nombre_archivo)
-    
+        return None
     try:
         imagen = Image.open(io.BytesIO(bytes_imagen))
-        imagen = ImageOps.exif_transpose(imagen) # Mantener orientación correcta
+        imagen = ImageOps.exif_transpose(imagen) # Respetar orientación vertical del celular
 
         if imagen.mode in ("RGBA", "P"):
             imagen = imagen.convert("RGB")
 
         imagen.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
-        imagen.save(ruta_completa, "JPEG", optimize=True, quality=calidad)
-
-        return ruta_completa
+        
+        buffer_salida = io.BytesIO()
+        imagen.save(buffer_salida, format="JPEG", optimize=True, quality=calidad)
+        return buffer_salida.getvalue()
     except Exception as e:
-        st.error(f"Error procesando la foto: {e}")
+        st.error(f"Error comprimiendo foto: {e}")
+        return None
+
+def guardar_foto_disco(bytes_comprimidos, comercio_nombre):
+    """Guarda la foto optimizada de session_state al disco."""
+    if not bytes_comprimidos:
         return ""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    nombre_limpio = re.sub(r'[^A-Za-z0-9]', '_', str(comercio_nombre))
+    nombre_archivo = f"{timestamp}_{nombre_limpio}.jpg"
+    ruta_completa = os.path.join(CARPETA_FOTOS, nombre_archivo)
+    
+    with open(ruta_completa, "wb") as f:
+        f.write(bytes_comprimidos)
+    return ruta_completa
 
 @st.cache_data
 def cargar_prospectos():
@@ -225,19 +228,21 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                 ])
                 
                 # -------------------------------------------------------------
-                # CÁMARA CON EVENTO ON_CHANGE (PERSISTENCIA GARANTIZADA)
+                # CAPTURA DIRECTA Y RESPALDO EN SESSION STATE
                 # -------------------------------------------------------------
                 st.markdown("#### 📸 Captura de Evidencia Fotográfica (En Vivo)")
                 
-                st.camera_input(
-                    "Tomar foto del local en tiempo real",
-                    key="widget_camara",
-                    on_change=procesar_captura_camara
-                )
+                foto_camara = st.camera_input("Tomar foto del local en tiempo real")
 
-                # Indicador visual si la foto ya se respaldó en memoria
-                if st.session_state.get('foto_temp_bytes'):
-                    st.success("✅ **Foto asegurada en memoria.** Lista para guardar.")
+                # Si la cámara toma la foto, se comprime y se respalda INMEDIATAMENTE
+                if foto_camara is not None:
+                    bytes_raw = foto_camara.getvalue()
+                    st.session_state['foto_comprimida_bytes'] = comprimir_y_procesar_foto(bytes_raw)
+
+                # Mostrar visualmente al vendedor que la foto ya está asegurada
+                if st.session_state.get('foto_comprimida_bytes') is not None:
+                    st.success("📸 **Foto procesada y asegurada en el sistema.**")
+                    st.image(st.session_state['foto_comprimida_bytes'], caption="Vista previa comprimida (~150 KB)", width=250)
 
                 rif_cliente_input = st.text_input("📄 Número de RIF del Cliente (Sin guiones, Ej: J123456780) (* Obligatorio para visitas efectivas):")
                 telefono_add = st.text_input("📞 Teléfono Adicional / Contacto Secundario:")
@@ -252,10 +257,10 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                 posee_rebanadora = st.radio("¿Posee rebanadora?", ["Sin responder", "SI", "NO"], horizontal=True)
                 observaciones = st.text_area("Observaciones de la visita:")
                 
-                # BOTÓN DE PROCESAMIENTO DIRECTO
+                # BOTÓN FINAL DE REGISTRO
                 if st.button("📌 Registrar Visita y Guardar Check-in", type="primary", use_container_width=True):
                     
-                    # 1. VALIDACIÓN RIF
+                    # 1. VALIDACIÓN DE RIF
                     rif_limpio = limpiar_formato_rif(rif_cliente_input)
                     if estatus_visita == "Efectiva / Visita realizada":
                         if not rif_limpio:
@@ -265,19 +270,19 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                             st.error("❌ **FORMATO INVÁLIDO:** Por favor ingresa un RIF válido sin guiones (Ejemplo: J123456780).")
                             st.stop()
 
-                    # 2. VALIDACIÓN FOTO
-                    bytes_foto_respaldada = st.session_state.get('foto_temp_bytes', None)
+                    # 2. VALIDACIÓN DE FOTO (DESDE SESSION_STATE)
+                    bytes_foto_final = st.session_state.get('foto_comprimida_bytes', None)
                     
-                    if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado", "Efectiva / Visita realizada"] and not bytes_foto_respaldada:
-                        st.error("❌ **FOTO REQUERIDA:** Debes tomar la foto de evidencia con la cámara antes de presionar el botón.")
+                    if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado", "Efectiva / Visita realizada"] and bytes_foto_final is None:
+                        st.error("❌ **FOTO REQUERIDA:** Debes tomar la foto con la cámara antes de guardar.")
                         st.stop()
 
-                    # 3. GUARDAR Y COMPRIMIR FOTO EN DISCO
+                    # 3. ESCRIBIR FOTO OPTIMIZADA EN DISCO
                     ruta_foto_guardada = ""
-                    if bytes_foto_respaldada:
-                        ruta_foto_guardada = guardar_foto_evidencia(bytes_foto_respaldada, prospecto_sel_nombre, max_dimension=1280, calidad=75)
+                    if bytes_foto_final is not None:
+                        ruta_foto_guardada = guardar_foto_disco(bytes_foto_final, prospecto_sel_nombre)
 
-                    # 4. GUARDAR REGISTRO EN CSV
+                    # 4. APPEND AL CSV
                     registro = pd.DataFrame([{
                         'Fecha_Hora': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         'Sucursal': sucursal_sel,
@@ -304,9 +309,9 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                     else:
                         registro.to_csv(RUTA_AUDITORIA, mode='a', header=False, index=False, encoding='utf-8-sig')
 
-                    # Limpiar la foto del session_state para la siguiente visita
-                    if 'foto_temp_bytes' in st.session_state:
-                        del st.session_state['foto_temp_bytes']
+                    # Limpiar estado de la foto para la siguiente toma
+                    if 'foto_comprimida_bytes' in st.session_state:
+                        del st.session_state['foto_comprimida_bytes']
 
                     st.cache_data.clear()
                     st.balloons()
