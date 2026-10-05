@@ -8,7 +8,8 @@ import math
 import re
 import io
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from PIL import Image, ImageOps
 import streamlit as st
 from streamlit_js_eval import get_geolocation
@@ -40,8 +41,18 @@ if st.sidebar.button("🔄 Recargar Datos del Excel", use_container_width=True):
     st.rerun()
 
 # -----------------------------------------------------------------------------
-# 2. FUNCIONES DE APOYO Y OPTIMIZACIÓN DE IMAGEN
+# 2. FUNCIONES DE APOYO, ZONA HORARIA VENEZUELA Y OPTIMIZACIÓN
 # -----------------------------------------------------------------------------
+def obtener_fecha_hora_actual():
+    """Retorna la fecha y hora exacta en zona horaria de Venezuela (UTC-4)."""
+    try:
+        # Intenta usar la zona horaria oficial de Caracas
+        ahora_caracas = datetime.now(ZoneInfo("America/Caracas"))
+    except Exception:
+        # Fallback de respaldo (Restar 4 horas directamente a UTC)
+        ahora_caracas = datetime.utcnow() - timedelta(hours=4)
+    return ahora_caracas.strftime("%Y-%m-%d %H:%M:%S")
+
 def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
     R = 6371000  # Radio terrestre en metros
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
@@ -226,19 +237,14 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                     "Local no existe / Cambió de rubro"
                 ])
                 
-                # -------------------------------------------------------------
-                # CAPTURA MANTENIENDO PERSISTENCIA
-                # -------------------------------------------------------------
                 st.markdown("#### 📸 Captura de Evidencia Fotográfica (En Vivo)")
                 
                 foto_camara = st.camera_input("Tomar foto del local en tiempo real")
 
-                # ✅ CAMBIO CLAVE: Solo actualiza session_state si SE TOMÓ UNA FOTO NUEVA
                 if foto_camara is not None:
                     bytes_raw = foto_camara.getvalue()
                     st.session_state['foto_comprimida_bytes'] = comprimir_y_procesar_foto(bytes_raw)
 
-                # Mostrar la vista previa desde session_state
                 if st.session_state.get('foto_comprimida_bytes') is not None:
                     st.success("📸 **Foto procesada y asegurada en el sistema.**")
                     st.image(st.session_state['foto_comprimida_bytes'], caption="Vista previa comprimida (~150 KB)", width=250)
@@ -281,9 +287,12 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                     if bytes_foto_final is not None:
                         ruta_foto_guardada = guardar_foto_disco(bytes_foto_final, prospecto_sel_nombre)
 
-                    # 4. APPEND AL CSV
+                    # 4. CAPTURAR FECHA Y HORA EN ZONA HORARIA VENEZUELA (UTC-4)
+                    fecha_hora_caracas = obtener_fecha_hora_actual()
+
+                    # 5. APPEND AL CSV
                     registro = pd.DataFrame([{
-                        'Fecha_Hora': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'Fecha_Hora': fecha_hora_caracas,
                         'Sucursal': sucursal_sel,
                         'Asesor': vendedor_sel,
                         'Comercio': prospecto_sel_nombre,
