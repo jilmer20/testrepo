@@ -34,9 +34,8 @@ st.sidebar.divider()
 
 if st.sidebar.button("🔄 Recargar Datos del Excel", use_container_width=True):
     st.cache_data.clear()
-    for key in ['foto_comprimida_bytes', 'ruta_foto_temp']:
-        if key in st.session_state:
-            del st.session_state[key]
+    if 'foto_comprimida_bytes' in st.session_state:
+        del st.session_state['foto_comprimida_bytes']
     st.sidebar.success("¡Caché borrada! Leyendo la versión más reciente del Excel...")
     st.rerun()
 
@@ -228,18 +227,18 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                 ])
                 
                 # -------------------------------------------------------------
-                # CAPTURA DIRECTA Y RESPALDO EN SESSION STATE
+                # CAPTURA MANTENIENDO PERSISTENCIA
                 # -------------------------------------------------------------
                 st.markdown("#### 📸 Captura de Evidencia Fotográfica (En Vivo)")
                 
                 foto_camara = st.camera_input("Tomar foto del local en tiempo real")
 
-                # Si la cámara toma la foto, se comprime y se respalda INMEDIATAMENTE
+                # ✅ CAMBIO CLAVE: Solo actualiza session_state si SE TOMÓ UNA FOTO NUEVA
                 if foto_camara is not None:
                     bytes_raw = foto_camara.getvalue()
                     st.session_state['foto_comprimida_bytes'] = comprimir_y_procesar_foto(bytes_raw)
 
-                # Mostrar visualmente al vendedor que la foto ya está asegurada
+                # Mostrar la vista previa desde session_state
                 if st.session_state.get('foto_comprimida_bytes') is not None:
                     st.success("📸 **Foto procesada y asegurada en el sistema.**")
                     st.image(st.session_state['foto_comprimida_bytes'], caption="Vista previa comprimida (~150 KB)", width=250)
@@ -270,7 +269,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                             st.error("❌ **FORMATO INVÁLIDO:** Por favor ingresa un RIF válido sin guiones (Ejemplo: J123456780).")
                             st.stop()
 
-                    # 2. VALIDACIÓN DE FOTO (DESDE SESSION_STATE)
+                    # 2. VALIDACIÓN DE FOTO DESDE SESSION_STATE
                     bytes_foto_final = st.session_state.get('foto_comprimida_bytes', None)
                     
                     if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado", "Efectiva / Visita realizada"] and bytes_foto_final is None:
@@ -309,7 +308,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                     else:
                         registro.to_csv(RUTA_AUDITORIA, mode='a', header=False, index=False, encoding='utf-8-sig')
 
-                    # Limpiar estado de la foto para la siguiente toma
+                    # Limpiar estado de la foto tras guardar con éxito
                     if 'foto_comprimida_bytes' in st.session_state:
                         del st.session_state['foto_comprimida_bytes']
 
