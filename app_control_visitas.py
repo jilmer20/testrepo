@@ -230,17 +230,23 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                 
                 st.markdown("### 📝 Formulario de Registro")
                 
+                # INCLUSIÓN DE LA OPCIÓN CLIENTE EXISTENTE
                 estatus_visita = st.selectbox("Estatus de la Visita (*):", [
                     "Efectiva / Visita realizada", 
+                    "Cliente Existente",
                     "Cerrado",
                     "Clausurado",
                     "No interesado", 
                     "Local no existe / Cambió de rubro"
                 ])
                 
+                # ACTIVACIÓN DINÁMICA DEL CAMPO CÓDIGO DE CLIENTE
+                codigo_cliente_input = ""
+                if estatus_visita == "Cliente Existente":
+                    codigo_cliente_input = st.text_input("🆔 Código del Cliente (* Obligatorio):", placeholder="Ej: 001234").strip()
+
                 st.markdown("#### 📸 Captura de Evidencia Fotográfica (En Vivo)")
                 
-                # USAMOS KEY DINÁMICA PARA REINICIAR LA CÁMARA DESPUÉS DE CADA CHECK-IN
                 cam_key = f"cam_widget_{st.session_state['cam_key_id']}"
                 foto_camara = st.camera_input("Tomar foto del local en tiempo real", key=cam_key)
 
@@ -268,7 +274,12 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                 # BOTÓN FINAL DE REGISTRO
                 if st.button("📌 Registrar Visita y Guardar Check-in", type="primary", use_container_width=True):
                     
-                    # 1. VALIDACIÓN DE RIF
+                    # 1. VALIDACIÓN CLIENTE EXISTENTE
+                    if estatus_visita == "CLIENTE EXISTENTE" and not codigo_cliente_input:
+                        st.error("❌ **CAMPO OBLIGATORIO:** Debes ingresar el Código del Cliente para registrar esta visita.")
+                        st.stop()
+
+                    # 2. VALIDACIÓN DE RIF
                     rif_limpio = limpiar_formato_rif(rif_cliente_input)
                     if estatus_visita == "Efectiva / Visita realizada":
                         if not rif_limpio:
@@ -278,28 +289,29 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                             st.error("❌ **FORMATO INVÁLIDO:** Por favor ingresa un RIF válido sin guiones (Ejemplo: J123456780).")
                             st.stop()
 
-                    # 2. VALIDACIÓN DE FOTO DESDE SESSION_STATE
+                    # 3. VALIDACIÓN DE FOTO DESDE SESSION_STATE
                     bytes_foto_final = st.session_state.get('foto_comprimida_bytes', None)
                     
-                    if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado", "Efectiva / Visita realizada"] and bytes_foto_final is None:
+                    if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado", "Efectiva / Visita realizada", "CLIENTE EXISTENTE"] and bytes_foto_final is None:
                         st.error("❌ **FOTO REQUERIDA:** Debes tomar la foto con la cámara antes de guardar.")
                         st.stop()
 
-                    # 3. ESCRIBIR FOTO OPTIMIZADA EN DISCO
+                    # 4. ESCRIBIR FOTO OPTIMIZADA EN DISCO
                     ruta_foto_guardada = ""
                     if bytes_foto_final is not None:
                         ruta_foto_guardada = guardar_foto_disco(bytes_foto_final, prospecto_sel_nombre)
 
-                    # 4. CAPTURAR FECHA Y HORA EN ZONA HORARIA VENEZUELA (UTC-4)
+                    # 5. CAPTURAR FECHA Y HORA EN ZONA HORARIA VENEZUELA (UTC-4)
                     fecha_hora_caracas = obtener_fecha_hora_actual()
 
-                    # 5. APPEND AL CSV
+                    # 6. APPEND AL CSV
                     registro = pd.DataFrame([{
                         'Fecha_Hora': fecha_hora_caracas,
                         'Sucursal': sucursal_sel,
                         'Asesor': vendedor_sel,
                         'Comercio': prospecto_sel_nombre,
                         'Estatus': estatus_visita,
+                        'Codigo_Cliente': codigo_cliente_input,
                         'Intento_Numero': num_intentos_previos + 1,
                         'RIF_Cliente': rif_limpio,
                         'Telefono_Adicional': telefono_add,
@@ -320,11 +332,10 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                     else:
                         registro.to_csv(RUTA_AUDITORIA, mode='a', header=False, index=False, encoding='utf-8-sig')
 
-                    # 🧹 LIMPIEZA TOTAL DE MEMORIA Y REINICIO DE CÁMARA TRAS REGISTRO EXITOSO
+                    # Limpiar estado de la foto tras guardar con éxito
                     if 'foto_comprimida_bytes' in st.session_state:
                         del st.session_state['foto_comprimida_bytes']
                     
-                    # Incrementar el identificador para destruir la foto anterior de la cámara
                     st.session_state['cam_key_id'] += 1
 
                     st.cache_data.clear()
