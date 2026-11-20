@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-# In[ ]:
-
 import os
 import math
 import re
@@ -25,7 +23,6 @@ CARPETA_FOTOS = "Fotos_Evidencia"
 if not os.path.exists(CARPETA_FOTOS):
     os.makedirs(CARPETA_FOTOS)
 
-# Inicializar clave dinámica para el widget de la cámara si no existe
 if 'cam_key_id' not in st.session_state:
     st.session_state['cam_key_id'] = 0
 
@@ -49,7 +46,6 @@ if st.sidebar.button("🔄 Recargar Datos del Excel", use_container_width=True):
 # 2. FUNCIONES DE APOYO, ZONA HORARIA VENEZUELA Y OPTIMIZACIÓN
 # -----------------------------------------------------------------------------
 def obtener_fecha_hora_actual():
-    """Retorna la fecha y hora exacta en zona horaria de Venezuela (UTC-4)."""
     try:
         ahora_caracas = datetime.now(ZoneInfo("America/Caracas"))
     except Exception:
@@ -57,11 +53,10 @@ def obtener_fecha_hora_actual():
     return ahora_caracas.strftime("%Y-%m-%d %H:%M:%S")
 
 def calcular_distancia_haversine(lat1, lon1, lat2, lon2):
-    R = 6371000  # Radio terrestre en metros
+    R = 6371000
     phi1, phi2 = math.radians(lat1), math.radians(lat2)
     delta_phi = math.radians(lat2 - lat1)
     delta_lambda = math.radians(lon2 - lon1)
-
     a = (math.sin(delta_phi / 2) ** 2 +
          math.cos(phi1) * math.cos(phi2) * math.sin(delta_lambda / 2) ** 2)
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
@@ -78,12 +73,9 @@ def comprimir_y_procesar_foto(bytes_imagen, max_dimension=1280, calidad=75):
     try:
         imagen = Image.open(io.BytesIO(bytes_imagen))
         imagen = ImageOps.exif_transpose(imagen)
-
         if imagen.mode in ("RGBA", "P"):
             imagen = imagen.convert("RGB")
-
         imagen.thumbnail((max_dimension, max_dimension), Image.Resampling.LANCZOS)
-        
         buffer_salida = io.BytesIO()
         imagen.save(buffer_salida, format="JPEG", optimize=True, quality=calidad)
         return buffer_salida.getvalue()
@@ -98,7 +90,6 @@ def guardar_foto_disco(bytes_comprimidos, comercio_nombre):
     nombre_limpio = re.sub(r'[^A-Za-z0-9]', '_', str(comercio_nombre))
     nombre_archivo = f"{timestamp}_{nombre_limpio}.jpg"
     ruta_completa = os.path.join(CARPETA_FOTOS, nombre_archivo)
-    
     with open(ruta_completa, "wb") as f:
         f.write(bytes_comprimidos)
     return ruta_completa
@@ -119,11 +110,9 @@ def obtener_comercios_finalizados():
             if 'Comercio' in df_aud.columns and 'Estatus' in df_aud.columns:
                 estatus_reintento = ["Cerrado temporalmente", "No desea ser visitado", "Cerrado", "No interesado"]
                 definitivos = df_aud[~df_aud['Estatus'].isin(estatus_reintento)]['Comercio'].unique().tolist()
-                
                 df_reintentos = df_aud[df_aud['Estatus'].isin(estatus_reintento)]
                 conteo_reintentos = df_reintentos.groupby('Comercio').size()
                 descartados_segunda_visita = conteo_reintentos[conteo_reintentos >= 2].index.tolist()
-                
                 return list(set(definitivos + descartados_segunda_visita))
         except Exception:
             return []
@@ -139,6 +128,27 @@ def obtener_conteo_visitas_comercio(comercio_nombre):
             return 0
     return 0
 
+def migrar_csv_con_estado():
+    """Si el CSV ya existe y no tiene la columna 'Estado', la inserta vacía
+    a la derecha de 'Sucursal' para mantener la compatibilidad hacia atrás."""
+    if not os.path.exists(RUTA_AUDITORIA):
+        return
+    try:
+        df_check = pd.read_csv(RUTA_AUDITORIA, nrows=0)
+        if 'Estado' in df_check.columns:
+            return
+        df_full = pd.read_csv(RUTA_AUDITORIA)
+        if 'Sucursal' in df_full.columns:
+            pos = df_full.columns.get_loc('Sucursal') + 1
+        else:
+            pos = 0
+        df_full.insert(pos, 'Estado', '')
+        df_full.to_csv(RUTA_AUDITORIA, index=False, encoding='utf-8-sig')
+    except Exception:
+        pass
+
+migrar_csv_con_estado()
+
 # =============================================================================
 # MODO 1: REGISTRO DE VISITAS DE CAMPO (ASESORES DE VENTA)
 # =============================================================================
@@ -153,23 +163,44 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         st.stop()
 
     columnas_lower = {col.lower(): col for col in df_prospectos.columns}
-    col_sucursal = columnas_lower.get('sucursal', columnas_lower.get('estado', df_prospectos.columns[0]))
 
+    # ---- Detección robusta de columnas ----
+    col_sucursal = columnas_lower.get('sucursal', df_prospectos.columns[0])
+    col_estado   = columnas_lower.get('estado', None)
+
+    # 1) SUCURSAL
     sucursales_disponibles = sorted(df_prospectos[col_sucursal].dropna().astype(str).unique())
     sucursal_sel = st.selectbox("🏢 1. Selecciona tu Sucursal:", sucursales_disponibles)
 
     df_sucursal = df_prospectos[df_prospectos[col_sucursal].astype(str) == sucursal_sel].copy()
 
-    col_asesor = columnas_lower.get('id-nombre', columnas_lower.get('id_vendedor', 'Asesor'))
-    vendedores_disponibles = sorted(df_sucursal[col_asesor].dropna().astype(str).unique())
-    vendedor_sel = st.selectbox("👤 2. Selecciona tu Asesor (ID - Nombre):", vendedores_disponibles)
+    # 2) ESTADO (en cascada, solo si hay una columna Estado distinta de Sucursal)
+    estado_sel = ""
+    df_estado = df_sucursal
+    if col_estado and col_estado != col_sucursal:
+        estados_disponibles = sorted(df_sucursal[col_estado].dropna().astype(str).unique())
+        if len(estados_disponibles) > 0:
+            estado_sel = st.selectbox("🗺️ 2. Selecciona tu Estado:", estados_disponibles)
+            df_estado = df_sucursal[df_sucursal[col_estado].astype(str) == estado_sel].copy()
+        else:
+            st.warning("⚠️ La sucursal seleccionada no tiene estados asociados.")
 
-    df_vendedor_total = df_sucursal[df_sucursal[col_asesor].astype(str) == vendedor_sel].copy()
-    
+    # 3) ASESOR (en cascada, filtrado por Sucursal + Estado)
+    col_asesor = columnas_lower.get('id-nombre', columnas_lower.get('id_vendedor', 'Asesor'))
+    vendedores_disponibles = sorted(df_estado[col_asesor].dropna().astype(str).unique())
+
+    if len(vendedores_disponibles) == 0:
+        st.warning("⚠️ No hay asesores disponibles para la combinación Sucursal / Estado seleccionada.")
+        st.stop()
+
+    vendedor_sel = st.selectbox("👤 3. Selecciona tu Asesor (ID - Nombre):", vendedores_disponibles)
+
+    df_vendedor_total = df_estado[df_estado[col_asesor].astype(str) == vendedor_sel].copy()
+
     completados_lista = obtener_comercios_finalizados()
     col_nombre = columnas_lower.get('nombre', 'Nombre')
     df_vendedor_pendiente = df_vendedor_total[~df_vendedor_total[col_nombre].isin(completados_lista)].copy()
-    
+
     total_asignados = len(df_vendedor_total)
     restantes = len(df_vendedor_pendiente)
     atendidos = total_asignados - restantes
@@ -200,7 +231,7 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
             rubro_val = str(row_prospecto.get('Rubro', row_prospecto.get('rubro', 'No especificado')))
             tel_val = str(row_prospecto.get('Telefono', row_prospecto.get('telefono', row_prospecto.get('phone', 'No disponible'))))
             web_val = str(row_prospecto.get('Sitio_Web', row_prospecto.get('website', row_prospecto.get('sitio_web', 'No disponible'))))
-            
+
             col_a.markdown(f"**🏷 Rubro:** {rubro_val}")
             col_a.markdown(f"**📞 Teléfono Principal:** {tel_val}")
             col_b.markdown(f"**🌐 Sitio Web:** {web_val}")
@@ -217,20 +248,19 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         if loc:
             lat_vendedor = loc['coords']['latitude']
             lon_vendedor = loc['coords']['longitude']
-            
+
             st.success(f"📍 GPS Capturado: `{lat_vendedor:.5f}, {lon_vendedor:.5f}`")
-            
+
             distancia_m = calcular_distancia_haversine(lat_vendedor, lon_vendedor, lat_target, lon_target)
             RADIO_MAXIMO_M = 40.0
-            
+
             st.metric(label="Distancia al Establecimiento", value=f"{distancia_m} metros")
-            
+
             if distancia_m <= RADIO_MAXIMO_M:
                 st.success("✅ **CHECK-IN HABILITADO:** Confirmado que estás presencialmente en el comercio.")
-                
+
                 st.markdown("### 📝 Formulario de Registro")
-                
-                # INCLUSIÓN DE LA OPCIÓN CLIENTE EXISTENTE
+
                 estatus_visita = st.selectbox("Estatus de la Visita (*):", [
                     "Efectiva / Visita realizada", 
                     "Cliente Existente",
@@ -239,14 +269,13 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                     "No interesado", 
                     "Local no existe / Cambió de rubro"
                 ])
-                
-                # ACTIVACIÓN DINÁMICA DEL CAMPO CÓDIGO DE CLIENTE
+
                 codigo_cliente_input = ""
                 if estatus_visita == "Cliente Existente":
                     codigo_cliente_input = st.text_input("🆔 Código del Cliente (* Obligatorio):", placeholder="Ej: 001234").strip()
 
                 st.markdown("#### 📸 Captura de Evidencia Fotográfica (En Vivo)")
-                
+
                 cam_key = f"cam_widget_{st.session_state['cam_key_id']}"
                 foto_camara = st.camera_input("Tomar foto del local en tiempo real", key=cam_key)
 
@@ -260,26 +289,23 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
 
                 rif_cliente_input = st.text_input("📄 Número de RIF del Cliente (Sin guiones, Ej: J123456780) (* Obligatorio para visitas efectivas):")
                 telefono_add = st.text_input("📞 Teléfono Adicional / Contacto Secundario:")
-                
+
                 st.markdown("---")
                 st.markdown("#### 📊 Encuesta de Mercado (Opcional)")
-                
+
                 trabaja_bebidas_alimentos = st.radio("¿Vende o trabaja Ud. con Bebidas y Alimentos?", ["Sin responder", "SI", "NO"], horizontal=True)
                 trabaja_embutidos = st.radio("¿Vende o trabaja Ud. con embutidos?", ["Sin responder", "SI", "NO"], horizontal=True)
                 cuales_embutidos = st.text_input("¿Cuáles embutidos trabaja? (Opcional):")
                 posee_nevera = st.radio("¿Posee Nevera / Exhibidor Refrigerado?", ["Sin responder", "SI", "NO"], horizontal=True)
                 posee_rebanadora = st.radio("¿Posee rebanadora?", ["Sin responder", "SI", "NO"], horizontal=True)
                 observaciones = st.text_area("Observaciones de la visita:")
-                
-                # BOTÓN FINAL DE REGISTRO
+
                 if st.button("📌 Registrar Visita y Guardar Check-in", type="primary", use_container_width=True):
-                    
-                    # 1. VALIDACIÓN CLIENTE EXISTENTE
+
                     if estatus_visita == "CLIENTE EXISTENTE" and not codigo_cliente_input:
                         st.error("❌ **CAMPO OBLIGATORIO:** Debes ingresar el Código del Cliente para registrar esta visita.")
                         st.stop()
 
-                    # 2. VALIDACIÓN DE RIF
                     rif_limpio = limpiar_formato_rif(rif_cliente_input)
                     if estatus_visita == "Efectiva / Visita realizada":
                         if not rif_limpio:
@@ -289,25 +315,23 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                             st.error("❌ **FORMATO INVÁLIDO:** Por favor ingresa un RIF válido sin guiones (Ejemplo: J123456780).")
                             st.stop()
 
-                    # 3. VALIDACIÓN DE FOTO DESDE SESSION_STATE
                     bytes_foto_final = st.session_state.get('foto_comprimida_bytes', None)
-                    
+
                     if estatus_visita in ["Local no existe / Cambió de rubro", "Clausurado", "Efectiva / Visita realizada", "CLIENTE EXISTENTE"] and bytes_foto_final is None:
                         st.error("❌ **FOTO REQUERIDA:** Debes tomar la foto con la cámara antes de guardar.")
                         st.stop()
 
-                    # 4. ESCRIBIR FOTO OPTIMIZADA EN DISCO
                     ruta_foto_guardada = ""
                     if bytes_foto_final is not None:
                         ruta_foto_guardada = guardar_foto_disco(bytes_foto_final, prospecto_sel_nombre)
 
-                    # 5. CAPTURAR FECHA Y HORA EN ZONA HORARIA VENEZUELA (UTC-4)
                     fecha_hora_caracas = obtener_fecha_hora_actual()
 
-                    # 6. APPEND AL CSV
+                    # ---- Registro incluyendo ESTADO ----
                     registro = pd.DataFrame([{
                         'Fecha_Hora': fecha_hora_caracas,
                         'Sucursal': sucursal_sel,
+                        'Estado': estado_sel,
                         'Asesor': vendedor_sel,
                         'Comercio': prospecto_sel_nombre,
                         'Estatus': estatus_visita,
@@ -326,26 +350,26 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                         'Ruta_Foto_Evidencia': ruta_foto_guardada,
                         'Observaciones': observaciones
                     }])
-                    
+
                     if not os.path.exists(RUTA_AUDITORIA):
                         registro.to_csv(RUTA_AUDITORIA, index=False, encoding='utf-8-sig')
                     else:
+                        # Garantizar que la migración se haya aplicado antes de escribir
+                        migrar_csv_con_estado()
                         registro.to_csv(RUTA_AUDITORIA, mode='a', header=False, index=False, encoding='utf-8-sig')
 
-                    # Limpiar estado de la foto tras guardar con éxito
                     if 'foto_comprimida_bytes' in st.session_state:
                         del st.session_state['foto_comprimida_bytes']
-                    
-                    st.session_state['cam_key_id'] += 1
 
+                    st.session_state['cam_key_id'] += 1
                     st.cache_data.clear()
                     st.balloons()
-                    
+
                     if estatus_visita in ["Cerrado", "No interesado"] and num_intentos_previos == 0:
                         st.warning("⚠️ **Visita Registrada (1er Intento):** El prospecto se mantendrá en tu lista para una segunda visita de verificación.")
                     else:
                         st.success("🎉 **¡Visita Auditada con Éxito!** Registro guardado. Lista de prospectos actualizada.")
-                        
+
                     st.rerun()
             else:
                 st.error(f"🚫 **CHECK-IN BLOQUEADO:** Te encuentras a {distancia_m} metros. Acércate a menos de {RADIO_MAXIMO_M} metros para habilitar el registro.")
@@ -357,35 +381,35 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
 # =============================================================================
 elif modo_app == "🔐 Panel Admin / Auditoría":
     st.title("🔐 Panel de Control de Auditoría")
-    
+
     password = st.text_input("Ingresa la clave de administrador:", type="password")
-    
+
     if password == "Geolab2026":
         st.success("🔓 Acceso concedido")
-        
+
         if os.path.exists(RUTA_AUDITORIA):
             df_auditoria = pd.read_csv(RUTA_AUDITORIA)
-            
+
             st.subheader("📊 Resumen General de Visitas")
             col1, col2, col3 = st.columns(3)
             col1.metric("Total Visitas Auditadas", len(df_auditoria))
-            
+
             col_asesor_aud = 'Asesor' if 'Asesor' in df_auditoria.columns else 'id_vendedor'
             col2_val = df_auditoria[col_asesor_aud].nunique() if col_asesor_aud in df_auditoria.columns else 0
             col2.metric("Asesores Activos", col2_val)
-            
+
             col3.metric("Visitas Efectivas", len(df_auditoria[df_auditoria['Estatus'].str.contains("Efectiva", na=False)]))
-            
+
             st.subheader("📋 Registro Detallado de Check-ins y Encuesta")
             st.dataframe(df_auditoria, use_container_width=True)
 
             st.subheader("🖼️ Visor de Evidencias Fotográficas")
             df_con_fotos = df_auditoria[df_auditoria['Ruta_Foto_Evidencia'].notna() & (df_auditoria['Ruta_Foto_Evidencia'] != "")]
-            
+
             if len(df_con_fotos) > 0:
                 comercio_foto_sel = st.selectbox("Selecciona un comercio para ver su foto de evidencia:", df_con_fotos['Comercio'].unique())
                 registro_foto = df_con_fotos[df_con_fotos['Comercio'] == comercio_foto_sel].iloc[-1]
-                
+
                 ruta_img = registro_foto['Ruta_Foto_Evidencia']
                 if os.path.exists(ruta_img):
                     st.image(ruta_img, caption=f"Foto evidencia de {comercio_foto_sel} - Estatus: {registro_foto['Estatus']}")
@@ -393,9 +417,9 @@ elif modo_app == "🔐 Panel Admin / Auditoría":
                     st.warning("La foto registrada no se encuentra en el servidor.")
             else:
                 st.info("No hay fotos de evidencia guardadas aún.")
-            
+
             csv_data = df_auditoria.to_csv(index=False, encoding='utf-8-sig').encode('utf-8-sig')
-            
+
             st.download_button(
                 label="📥 Descargar Reporte Completo de Visitas (CSV / Excel)",
                 data=csv_data,
