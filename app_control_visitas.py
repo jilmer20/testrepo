@@ -129,8 +129,6 @@ def obtener_conteo_visitas_comercio(comercio_nombre):
     return 0
 
 def migrar_csv_con_estado():
-    """Si el CSV ya existe y no tiene la columna 'Estado', la inserta vacía
-    a la derecha de 'Sucursal' para mantener la compatibilidad hacia atrás."""
     if not os.path.exists(RUTA_AUDITORIA):
         return
     try:
@@ -163,29 +161,44 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
         st.stop()
 
     columnas_lower = {col.lower(): col for col in df_prospectos.columns}
-
-    # ---- Detección robusta de columnas ----
     col_sucursal = columnas_lower.get('sucursal', df_prospectos.columns[0])
     col_estado   = columnas_lower.get('estado', None)
 
-    # 1) SUCURSAL
-    sucursales_disponibles = sorted(df_prospectos[col_sucursal].dropna().astype(str).unique())
+    # =========================================================================
+    # 🛠️ SOLUCIÓN A DUPLICADOS (Normalización de texto)
+    # =========================================================================
+    def normalizar_texto(valor):
+        if pd.isna(valor):
+            return valor
+        # Convierte a string, quita espacios extra y pone Primera Letra Mayúscula
+        return str(valor).strip().title()
+
+    # Normalizamos la columna Sucursal en el DataFrame
+    df_prospectos[col_sucursal] = df_prospectos[col_sucursal].apply(normalizar_texto)
+    
+    # Normalizamos la columna Estado si existe
+    if col_estado and col_estado in df_prospectos.columns:
+        df_prospectos[col_estado] = df_prospectos[col_estado].apply(normalizar_texto)
+    # =========================================================================
+
+    # 1) SUCURSAL (Ya no habrá duplicados aquí)
+    sucursales_disponibles = sorted(df_prospectos[col_sucursal].dropna().unique())
     sucursal_sel = st.selectbox("🏢 1. Selecciona tu Sucursal:", sucursales_disponibles)
 
-    df_sucursal = df_prospectos[df_prospectos[col_sucursal].astype(str) == sucursal_sel].copy()
+    df_sucursal = df_prospectos[df_prospectos[col_sucursal] == sucursal_sel].copy()
 
-    # 2) ESTADO (en cascada, solo si hay una columna Estado distinta de Sucursal)
+    # 2) ESTADO (en cascada, solo si hay columna Estado)
     estado_sel = ""
     df_estado = df_sucursal
     if col_estado and col_estado != col_sucursal:
-        estados_disponibles = sorted(df_sucursal[col_estado].dropna().astype(str).unique())
+        estados_disponibles = sorted(df_sucursal[col_estado].dropna().unique())
         if len(estados_disponibles) > 0:
             estado_sel = st.selectbox("🗺️ 2. Selecciona tu Estado:", estados_disponibles)
-            df_estado = df_sucursal[df_sucursal[col_estado].astype(str) == estado_sel].copy()
+            df_estado = df_sucursal[df_sucursal[col_estado] == estado_sel].copy()
         else:
             st.warning("⚠️ La sucursal seleccionada no tiene estados asociados.")
 
-    # 3) ASESOR (en cascada, filtrado por Sucursal + Estado)
+    # 3) ASESOR (en cascada)
     col_asesor = columnas_lower.get('id-nombre', columnas_lower.get('id_vendedor', 'Asesor'))
     vendedores_disponibles = sorted(df_estado[col_asesor].dropna().astype(str).unique())
 
@@ -327,7 +340,6 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
 
                     fecha_hora_caracas = obtener_fecha_hora_actual()
 
-                    # ---- Registro incluyendo ESTADO ----
                     registro = pd.DataFrame([{
                         'Fecha_Hora': fecha_hora_caracas,
                         'Sucursal': sucursal_sel,
@@ -354,7 +366,6 @@ if modo_app == "📱 Registro de Visitas (Vendedor)":
                     if not os.path.exists(RUTA_AUDITORIA):
                         registro.to_csv(RUTA_AUDITORIA, index=False, encoding='utf-8-sig')
                     else:
-                        # Garantizar que la migración se haya aplicado antes de escribir
                         migrar_csv_con_estado()
                         registro.to_csv(RUTA_AUDITORIA, mode='a', header=False, index=False, encoding='utf-8-sig')
 
